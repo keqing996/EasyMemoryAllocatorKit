@@ -1,4 +1,6 @@
+cmake_minimum_required(VERSION 3.26)
 
+project(MemoryPool)
+set (CMAKE_CXX_STANDARD 20)
 
 add_subdirectory(01SimpleAllocator)
-add_subdirectory(02TLSF)
