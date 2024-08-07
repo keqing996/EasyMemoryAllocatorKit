@@ -5,11 +5,11 @@
 #include "Allocator/Helper.h"
 
 LinearAllocator::LinearAllocator(size_t minBlockSize)
-    : _defaultBlockSize(minBlockSize)
+    : _defaultBlockSize(minBlockSize < MIN_BLOCK_SIZE ? MIN_BLOCK_SIZE: minBlockSize)
     , _pFirst(nullptr)
     , _pTail(nullptr)
 {
-    AddBucket(minBlockSize);
+    AddBlock(_defaultBlockSize);
 }
 
 LinearAllocator::~LinearAllocator()
@@ -31,8 +31,8 @@ void* LinearAllocator::Allocate(size_t size, size_t alignment)
 
     if (available < alignedSize)
     {
-        size_t newBucketSize = alignedSize > _defaultBlockSize ? alignedSize : _defaultBlockSize;
-        AddBucket(newBucketSize);
+        size_t newBlockSize = alignedSize > _defaultBlockSize ? alignedSize : _defaultBlockSize;
+        AddBlock(newBlockSize);
     }
 
     void* result = _pTail->pCurrent;
@@ -73,27 +73,27 @@ float LinearAllocator::CalculateOccupancyRate() const
     return static_cast<float>(used) / total;
 }
 
-void LinearAllocator::AddBucket(size_t size)
+void LinearAllocator::AddBlock(size_t size)
 {
     size_t spacePaddedSize =  Helper::UpAlignment(size, DEFAULT_ALIGNMENT);
     size_t totalSize = spacePaddedSize + GetBlockHeaderPaddedSize();
     
     void* pMemory = ::malloc(totalSize);
 
-    BlockHeader* pHeader = reinterpret_cast<BlockHeader*>(pMemory);
-    pHeader->pCurrent = GetBlockStartPtr(pHeader);
-    pHeader->pNext = nullptr;
-    pHeader->size = spacePaddedSize;
+    BlockHeader* pBlock = reinterpret_cast<BlockHeader*>(pMemory);
+    pBlock->pCurrent = GetBlockStartPtr(pBlock);
+    pBlock->pNext = nullptr;
+    pBlock->size = spacePaddedSize;
     
     if (_pFirst == nullptr)
     {
-        _pFirst = pHeader;
-        _pTail = pHeader;
+        _pFirst = pBlock;
+        _pTail = pBlock;
     }
     else 
     {
-        _pTail->pNext = pHeader;
-        _pTail = pHeader;
+        _pTail->pNext = pBlock;
+        _pTail = pBlock;
     }
 }
 

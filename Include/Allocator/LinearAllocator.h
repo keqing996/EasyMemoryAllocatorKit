@@ -3,6 +3,7 @@
 class LinearAllocator
 {
     static constexpr size_t DEFAULT_ALIGNMENT = 8;
+    static constexpr size_t MIN_BLOCK_SIZE = 128;
 
     struct BlockHeader
     {
@@ -25,13 +26,13 @@ public:
     float CalculateOccupancyRate() const;
 
 private:
-    void AddBucket(size_t size);
+    void AddBlock(size_t size);
     void* GetBlockStartPtr(const BlockHeader* pBlock) const;
     size_t GetUsed(const BlockHeader* pBlock) const;
+
     static size_t GetBlockHeaderPaddedSize();
 
 private:
-
     size_t _defaultBlockSize;
     BlockHeader* _pFirst;
     BlockHeader* _pTail;
