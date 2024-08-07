@@ -2,7 +2,7 @@
 
 class LinearAllocator
 {
-    static constexpr size_t DEFAULT_ALIGNMENT = 4;
+    static constexpr size_t DEFAULT_ALIGNMENT = 8;
 
 public:
     explicit LinearAllocator(size_t minBlockSize);

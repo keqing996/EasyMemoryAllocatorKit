@@ -1,4 +1,5 @@
 
+#include <cstddef>
 #include <cstdlib>
 #include "Allocator/LinearAllocator.h"
 #include "Allocator/Helper.h"
@@ -74,16 +75,17 @@ float LinearAllocator::CalculateOccupancyRate() const
 
 void LinearAllocator::AddBucket(size_t size)
 {
-    size_t blockNeedSize = size + sizeof(BlockHeader);
-    size_t alignedSize = Helper::UpAlignment(blockNeedSize, DEFAULT_ALIGNMENT);
+    size_t headerPaddingSize = Helper::UpAlignment(sizeof(BlockHeader), DEFAULT_ALIGNMENT);
+    size_t spacePaddingSize =  Helper::UpAlignment(size, DEFAULT_ALIGNMENT);
+    size_t totalPaddingSize = headerPaddingSize + spacePaddingSize;
     
-    void* pMemory = ::malloc(alignedSize);
+    void* pMemory = ::malloc(totalPaddingSize);
 
     BlockHeader* pHeader = reinterpret_cast<BlockHeader*>(pMemory);
-    pHeader->pBegin = reinterpret_cast<void*>(reinterpret_cast<size_t>(pMemory) + sizeof(BlockHeader));
+    pHeader->pBegin = reinterpret_cast<void*>(reinterpret_cast<size_t>(pMemory) + headerPaddingSize);
     pHeader->pCurrent = pHeader->pBegin;
     pHeader->pNext = nullptr;
-    pHeader->size = alignedSize - sizeof(BlockHeader);
+    pHeader->size = spacePaddingSize;
     
     if (_pFirst == nullptr)
     {
