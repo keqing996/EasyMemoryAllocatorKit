@@ -4,6 +4,13 @@ class LinearAllocator
 {
     static constexpr size_t DEFAULT_ALIGNMENT = 8;
 
+    struct BlockHeader
+    {
+        BlockHeader* pNext;
+        void* pCurrent;
+        size_t size;
+    };
+
 public:
     explicit LinearAllocator(size_t minBlockSize);
     ~LinearAllocator();
@@ -19,17 +26,11 @@ public:
 
 private:
     void AddBucket(size_t size);
+    void* GetBlockStartPtr(const BlockHeader* pBlock) const;
+    size_t GetUsed(const BlockHeader* pBlock) const;
+    static size_t GetBlockHeaderPaddedSize();
 
 private:
-    struct BlockHeader
-    {
-        BlockHeader* pNext;
-        void* pBegin;
-        void* pCurrent;
-        size_t size;
-
-        size_t GetUsed() const;
-    };
 
     size_t _defaultBlockSize;
     BlockHeader* _pFirst;
