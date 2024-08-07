@@ -1,8 +1,5 @@
 #pragma once
 
-#include <cstdint>
-#include <list>
-
 class LinearAllocator
 {
     static constexpr size_t DEFAULT_ALIGNMENT = 4;
@@ -24,16 +21,19 @@ private:
     void AddBucket(size_t size);
 
 private:
-    struct Block
+    struct BlockHeader
     {
+        BlockHeader* pNext;
         void* pBegin;
         void* pCurrent;
         size_t size;
+
+        size_t GetUsed() const;
     };
 
     size_t _defaultBlockSize;
-    std::list<Block> _blockList;
-    size_t _currentBlockNum;
+    BlockHeader* _pFirst;
+    BlockHeader* _pTail;
 };
 
 
