@@ -37,7 +37,10 @@ private:
     void* AllocateFromBlock(const BlockHeader* pBlock, size_t paddedSize);
 
     static size_t GetBlockHeaderPaddedSize();
+    static size_t GetNodeHeaderPaddedSize();
     static void* GetBlockStartPtr(const BlockHeader* pBlock);
+    static void* GetNodeStartPtr(const NodeHeader* pNode);
+    static size_t GetNodeAvailableSize(const BlockHeader* pBlock, const NodeHeader* pNode);
 
 private:
     size_t _defaultBlockSize;
