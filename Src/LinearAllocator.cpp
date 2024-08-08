@@ -2,10 +2,13 @@
 #include <cstddef>
 #include <cstdlib>
 #include "Allocator/LinearAllocator.h"
-#include "Allocator/Helper.h"
+#include "Util.hpp"
 
-LinearAllocator::LinearAllocator(size_t minBlockSize)
-    : _defaultBlockSize(minBlockSize < MIN_BLOCK_SIZE ? MIN_BLOCK_SIZE: minBlockSize)
+static const size_t MIN_BLOCK_SIZE = 128;
+
+LinearAllocator::LinearAllocator(size_t minBlockSize, size_t defaultAlignment)
+    : _defaultAlignment(defaultAlignment)
+    , _defaultBlockSize(minBlockSize < MIN_BLOCK_SIZE ? MIN_BLOCK_SIZE: minBlockSize)
     , _pFirst(nullptr)
     , _pTail(nullptr)
 {
@@ -23,9 +26,14 @@ LinearAllocator::~LinearAllocator()
     }
 }
 
+void* LinearAllocator::Allocate(size_t size)
+{
+    return Allocate(size, _defaultAlignment);
+}
+
 void* LinearAllocator::Allocate(size_t size, size_t alignment)
 {
-    size_t alignedSize = Helper::UpAlignment(size, alignment);
+    size_t alignedSize = Util::UpAlignment(size, alignment);
 
     size_t available = _pTail->size - GetUsed(_pTail);
 
@@ -75,8 +83,8 @@ float LinearAllocator::CalculateOccupancyRate() const
 
 void LinearAllocator::AddBlock(size_t size)
 {
-    size_t spacePaddedSize =  Helper::UpAlignment(size, DEFAULT_ALIGNMENT);
-    size_t totalSize = spacePaddedSize + GetBlockHeaderPaddedSize();
+    size_t spacePaddedSize =  Util::UpAlignment(size, _defaultAlignment);
+    size_t totalSize = spacePaddedSize + Util::GetPaddedSize<BlockHeader>(_defaultAlignment);
     
     void* pMemory = ::malloc(totalSize);
 
@@ -100,17 +108,12 @@ void LinearAllocator::AddBlock(size_t size)
  void* LinearAllocator::GetBlockStartPtr(const BlockHeader* pBlock) const
  {
     size_t addrBlock = reinterpret_cast<size_t>(pBlock);
-    return reinterpret_cast<void*>(addrBlock + GetBlockHeaderPaddedSize());
+    return reinterpret_cast<void*>(addrBlock + Util::GetPaddedSize<BlockHeader>(_defaultAlignment));
  }
 
 size_t LinearAllocator::GetUsed(const BlockHeader* pBlock) const
 {
     size_t addrBlock = reinterpret_cast<size_t>(pBlock);
-    size_t addtStart = addrBlock + GetBlockHeaderPaddedSize();
+    size_t addtStart = addrBlock + Util::GetPaddedSize<BlockHeader>(_defaultAlignment);
     return reinterpret_cast<size_t>(pBlock->pCurrent) - addtStart;
-}
-
-size_t LinearAllocator::GetBlockHeaderPaddedSize()
-{
-    return Helper::UpAlignment(sizeof(BlockHeader), DEFAULT_ALIGNMENT);
 }

@@ -1,11 +1,14 @@
 
 #include <cstddef>
 #include <cstdlib>
-#include "Allocator/Helper.h"
+#include "Util.hpp"
 #include "Allocator/FreeListAllocator.h"
 
-FreeListAllocator::FreeListAllocator(size_t minBlockSize)
-    : _defaultBlockSize(minBlockSize < MIN_BLOCK_SIZE ? MIN_BLOCK_SIZE: minBlockSize)
+static const size_t MIN_BLOCK_SIZE = 128;
+
+FreeListAllocator::FreeListAllocator(size_t minBlockSize, size_t defaultAlignment)
+    : _defaultAlignment(defaultAlignment)
+    , _defaultBlockSize(minBlockSize < MIN_BLOCK_SIZE ? MIN_BLOCK_SIZE: minBlockSize)
     , _pFirst(nullptr)
 {
     AddBlock(_defaultBlockSize);
@@ -36,9 +39,14 @@ size_t FreeListAllocator::GetCurrentBlockNum() const
     return result;
 }
 
+void* FreeListAllocator::Allocate(size_t size)
+{
+    return Allocate(size, _defaultAlignment);
+}
+
 void* FreeListAllocator::Allocate(size_t size, size_t alignment)
 {
-    size_t alignedSize = Helper::UpAlignment(size, alignment);
+    size_t alignedSize = Util::UpAlignment(size, alignment);
 
     BlockHeader* pCurrentBlock = _pFirst;
     while (true)
@@ -70,7 +78,7 @@ void* FreeListAllocator::AllocateFromBlock(const BlockHeader* pBlock, size_t pad
             // If left size is enough to place another NodeHeader, we create a new
             // free node.
             size_t leftSize = available - paddedSize;
-            if (leftSize > GetNodeHeaderPaddedSize())
+            if (leftSize > Util::GetPaddedSize<NodeHeader>(_defaultAlignment))
             {
                 NodeHeader* pNextFreeNode = reinterpret_cast<NodeHeader*>(
                     reinterpret_cast<size_t>(GetNodeStartPtr(pCurrentNode)) + paddedSize);
@@ -98,8 +106,9 @@ void* FreeListAllocator::AllocateFromBlock(const BlockHeader* pBlock, size_t pad
 void FreeListAllocator::Deallocate(void* p)
 {
     NodeHeader* pNodeHeader = reinterpret_cast<NodeHeader*>(
-        reinterpret_cast<size_t>(p) - GetNodeHeaderPaddedSize());
+        reinterpret_cast<size_t>(p) - Util::GetPaddedSize<NodeHeader>(_defaultAlignment));
 
+    // Maek this block unused
     pNodeHeader->used = false;
 
     // Merge unused block
@@ -109,8 +118,8 @@ void FreeListAllocator::Deallocate(void* p)
 
 FreeListAllocator::BlockHeader* FreeListAllocator::AddBlock(size_t size)
 {
-    size_t spacePaddedSize =  Helper::UpAlignment(size, DEFAULT_ALIGNMENT);
-    size_t totalSize = spacePaddedSize + GetBlockHeaderPaddedSize();
+    size_t spacePaddedSize =  Util::UpAlignment(size, _defaultAlignment);
+    size_t totalSize = spacePaddedSize + Util::GetPaddedSize<BlockHeader>(_defaultAlignment);
 
     void* pMemory = ::malloc(totalSize);
 
@@ -138,29 +147,19 @@ FreeListAllocator::BlockHeader* FreeListAllocator::AddBlock(size_t size)
     return pBlock;
 }
 
-size_t FreeListAllocator::GetBlockHeaderPaddedSize()
-{
-    return Helper::UpAlignment(sizeof(BlockHeader), DEFAULT_ALIGNMENT);
-}
-
-size_t FreeListAllocator::GetNodeHeaderPaddedSize()
-{
-    return Helper::UpAlignment(sizeof(NodeHeader), DEFAULT_ALIGNMENT);
-}
-
-void* FreeListAllocator::GetBlockStartPtr(const BlockHeader* pBlock)
+void* FreeListAllocator::GetBlockStartPtr(const BlockHeader* pBlock) const
 {
     size_t addrBlock = reinterpret_cast<size_t>(pBlock);
-    return reinterpret_cast<void*>(addrBlock + GetBlockHeaderPaddedSize());
+    return reinterpret_cast<void*>(addrBlock + Util::GetPaddedSize<BlockHeader>(_defaultAlignment));
 }
 
-void* FreeListAllocator::GetNodeStartPtr(const NodeHeader* pNode)
+void* FreeListAllocator::GetNodeStartPtr(const NodeHeader* pNode) const
 {
     size_t addrNode = reinterpret_cast<size_t>(pNode);
-    return reinterpret_cast<void*>(addrNode + GetNodeHeaderPaddedSize());
+    return reinterpret_cast<void*>(addrNode + Util::GetPaddedSize<NodeHeader>(_defaultAlignment));
 }
 
-size_t FreeListAllocator::GetNodeAvailableSize(const BlockHeader* pBlock, const NodeHeader* pNode)
+size_t FreeListAllocator::GetNodeAvailableSize(const BlockHeader* pBlock, const NodeHeader* pNode) const
 {
     if (pNode == nullptr)
         return 0;
