@@ -4,19 +4,6 @@
 
 class FreeListAllocator
 {
-    struct NodeHeader
-    {
-        NodeHeader* pNext;
-        bool used;
-    };
-
-    struct BlockHeader
-    {
-        BlockHeader* pNext;
-        size_t size;
-        NodeHeader* pFirstNode;
-    };
-
 public:
     FreeListAllocator(size_t minBlockSize, size_t defaultAlignment);
     ~FreeListAllocator();
@@ -31,6 +18,19 @@ public:
     size_t GetCurrentBlockNum() const;
 
 private:
+    struct NodeHeader
+    {
+        NodeHeader* pNext;
+        bool used;
+    };
+
+    struct BlockHeader
+    {
+        BlockHeader* pNext;
+        size_t size;
+        NodeHeader* pFirstNode;
+    };
+
     BlockHeader* AddBlock(size_t size);
     void* AllocateFromBlock(const BlockHeader* pBlock, size_t paddedSize);
 
