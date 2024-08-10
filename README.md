@@ -1,4 +1,5 @@
 
+[![Build](https://github.com/keqing996/MemoryAllocator/actions/workflows/multi-platform.yml/badge.svg)](https://github.com/keqing996/MemoryAllocator/actions/workflows/multi-platform.yml)
 
 ## Linear Allocator
 
