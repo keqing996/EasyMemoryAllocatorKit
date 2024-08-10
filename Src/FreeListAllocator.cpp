@@ -68,7 +68,7 @@ void* FreeListAllocator::Allocate(size_t size, size_t alignment)
 
 void* FreeListAllocator::AllocateFromBlock(const BlockHeader* pBlock, size_t paddedSize)
 {
-    NodeHeader* pCurrentNode = pBlock->pFirstNode;
+    NodeHeader* pCurrentNode = GetBlockFirstNode(pBlock);
     while (true)
     {
         size_t available = GetNodeAvailableSize(pBlock, pCurrentNode);
@@ -127,7 +127,6 @@ FreeListAllocator::BlockHeader* FreeListAllocator::AddBlock(size_t size)
 
     pBlock->pNext = nullptr;
     pBlock->size = spacePaddedSize;
-    pBlock->pFirstNode = pFirstNode;
 
     pFirstNode->pNext = nullptr;
     pFirstNode->used = false;
@@ -150,6 +149,11 @@ void* FreeListAllocator::GetBlockStartPtr(const BlockHeader* pBlock) const
 {
     size_t addrBlock = reinterpret_cast<size_t>(pBlock);
     return reinterpret_cast<void*>(addrBlock + Util::GetPaddedSize<BlockHeader>(_defaultAlignment));
+}
+
+FreeListAllocator::NodeHeader* FreeListAllocator::GetBlockFirstNode(const BlockHeader* pBlock) const
+{
+    return reinterpret_cast<NodeHeader*>(GetBlockStartPtr(pBlock));
 }
 
 void* FreeListAllocator::GetNodeStartPtr(const NodeHeader* pNode) const

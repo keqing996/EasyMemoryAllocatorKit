@@ -28,13 +28,13 @@ private:
     {
         BlockHeader* pNext;
         size_t size;
-        NodeHeader* pFirstNode;
     };
 
     BlockHeader* AddBlock(size_t size);
     void* AllocateFromBlock(const BlockHeader* pBlock, size_t paddedSize);
 
     void* GetBlockStartPtr(const BlockHeader* pBlock) const;
+    NodeHeader* GetBlockFirstNode(const BlockHeader* pBlock) const;
     void* GetNodeStartPtr(const NodeHeader* pNode) const;
     size_t GetNodeAvailableSize(const BlockHeader* pBlock, const NodeHeader* pNode) const;
 
