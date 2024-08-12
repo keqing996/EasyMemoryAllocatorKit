@@ -34,7 +34,7 @@ void* LinearAllocator::Allocate(size_t size, size_t alignment)
 {
     size_t alignedSize = Util::UpAlignment(size, alignment);
 
-    size_t available = _pTail->size - GetUsed(_pTail);
+    size_t available = _pTail->size - GetBlockUsedSize(_pTail);
 
     if (available < alignedSize)
     {
@@ -50,6 +50,16 @@ void* LinearAllocator::Allocate(size_t size, size_t alignment)
 void LinearAllocator::Deallocate(void* p)
 {
     // do nothing
+}
+
+size_t LinearAllocator::GetCurrentAlignment() const
+{
+    return _defaultAlignment;
+}
+
+size_t LinearAllocator::GetDefaultBlockSize() const
+{
+    return _defaultBlockSize;
 }
 
 size_t LinearAllocator::GetCurrentBlockNum() const
@@ -74,7 +84,7 @@ float LinearAllocator::CalculateOccupancyRate() const
     while (pItr != nullptr)
     {
         total += pItr->size;
-        used += GetUsed(pItr);
+        used += GetBlockUsedSize(pItr);
     }
 
     return static_cast<float>(used) / total;
@@ -110,9 +120,14 @@ void LinearAllocator::AddBlock(size_t size)
     return reinterpret_cast<void*>(addrBlock + Util::GetPaddedSize<BlockHeader>(_defaultAlignment));
  }
 
-size_t LinearAllocator::GetUsed(const BlockHeader* pBlock) const
+size_t LinearAllocator::GetBlockUsedSize(const BlockHeader* pBlock) const
 {
     size_t addrBlock = reinterpret_cast<size_t>(pBlock);
     size_t addtStart = addrBlock + Util::GetPaddedSize<BlockHeader>(_defaultAlignment);
     return reinterpret_cast<size_t>(pBlock->pCurrent) - addtStart;
+}
+
+const LinearAllocator::BlockHeader* LinearAllocator::GetFirstBlockPtr() const
+{
+    return _pFirst;
 }

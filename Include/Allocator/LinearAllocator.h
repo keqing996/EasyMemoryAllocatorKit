@@ -12,13 +12,6 @@ public:
     LinearAllocator(LinearAllocator&& rhs) = delete;
 
 public:
-    void* Allocate(size_t size);
-    void* Allocate(size_t size, size_t alignment);
-    void Deallocate(void* p);
-    size_t GetCurrentBlockNum() const;
-    float CalculateOccupancyRate() const;
-
-private:
     struct BlockHeader
     {
         BlockHeader* pNext;
@@ -26,9 +19,25 @@ private:
         size_t size;
     };
 
-    void AddBlock(size_t size);
+public:
+    // Allocate & Deallocate
+    void* Allocate(size_t size);
+    void* Allocate(size_t size, size_t alignment);
+    void Deallocate(void* p);
+
+    // Getter
+    size_t GetCurrentAlignment() const;
+    size_t GetDefaultBlockSize() const;
+
+    // Block information
+    size_t GetCurrentBlockNum() const;
+    float CalculateOccupancyRate() const;
     void* GetBlockStartPtr(const BlockHeader* pBlock) const;
-    size_t GetUsed(const BlockHeader* pBlock) const;
+    size_t GetBlockUsedSize(const BlockHeader* pBlock) const;
+    const BlockHeader* GetFirstBlockPtr() const;
+
+private:
+    void AddBlock(size_t size);
 
 private:
     size_t _defaultAlignment;
