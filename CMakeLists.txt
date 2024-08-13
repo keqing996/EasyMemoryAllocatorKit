@@ -16,8 +16,11 @@ target_include_directories  (lib_allocator PUBLIC Include)
 option (ENABLE_ALLOCATOR_TEST OFF)
 
 if (ENABLE_ALLOCATOR_TEST)
+    enable_testing()
+
     add_executable          (test_linear_allocator Test/TestLinearAllocator.cpp)
     target_link_libraries   (test_linear_allocator lib_allocator)
+    add_test                (NAME test_linear_allocator COMMAND test_linear_allocator)
 
     add_executable          (test_free_list_allocator Test/TestFreeListAllocator.cpp)
     target_link_libraries   (test_free_list_allocator lib_allocator)
