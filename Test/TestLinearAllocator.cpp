@@ -138,9 +138,18 @@ TEST_CASE("TestAddBlock")
     size_t alignment = 8;
     AllocatorScope scope(128, alignment);
 
+    uint32_t* pUint = CUSTOM_NEW<uint32_t>();
+    *pUint = 0xABABABAB;
+
     struct Temp
     {
-        double number[20];
+        uint32_t number[40] {};
+
+        Temp()
+        {
+            for (int i = 0; i < 40; i++)
+                number[i] = 0xABABABAB;
+        }
     };
 
     printf("Size of struct: %llu\n", sizeof(Temp));
@@ -149,7 +158,8 @@ TEST_CASE("TestAddBlock")
 
     CHECK(gAllocator->GetCurrentBlockNum() == 2);
 
-    uint32_t* pUint = CUSTOM_NEW<uint32_t>();
+    uint32_t* pUint2 = CUSTOM_NEW<uint32_t>();
+    *pUint2 = 0xABABABAB;
 
     CHECK(gAllocator->GetCurrentBlockNum() == 3);
 
@@ -160,7 +170,7 @@ TEST_CASE("TestAddBlock")
     auto pThirdBlock = pFirstBlock->pNext->pNext;
     auto pThirdStart = gAllocator->GetBlockStartPtr(pThirdBlock);
 
-    CHECK(ToAddr(pThirdStart) == ToAddr(pUint));
+    CHECK(ToAddr(pThirdStart) == ToAddr(pUint2));
 
     Temp* pTemp2 = CUSTOM_NEW<Temp>();
 
