@@ -6,7 +6,7 @@
 static constexpr size_t MIN_BLOCK_SIZE = 128;
 
 LinearAllocator::LinearAllocator(size_t minBlockSize, size_t defaultAlignment)
-    : _defaultAlignment(Util::UpAlignment(defaultAlignment, 4))
+    : _defaultAlignment(Util::UpAlignmentPowerOfTwo(defaultAlignment))
     , _defaultBlockSize(minBlockSize < MIN_BLOCK_SIZE ? MIN_BLOCK_SIZE: minBlockSize)
     , _pFirst(nullptr)
     , _pTail(nullptr)
