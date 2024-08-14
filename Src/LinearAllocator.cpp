@@ -3,10 +3,10 @@
 #include "Allocator/LinearAllocator.h"
 #include "Util.hpp"
 
-static const size_t MIN_BLOCK_SIZE = 128;
+static constexpr size_t MIN_BLOCK_SIZE = 128;
 
 LinearAllocator::LinearAllocator(size_t minBlockSize, size_t defaultAlignment)
-    : _defaultAlignment(defaultAlignment)
+    : _defaultAlignment(Util::UpAlignment(defaultAlignment, 4))
     , _defaultBlockSize(minBlockSize < MIN_BLOCK_SIZE ? MIN_BLOCK_SIZE: minBlockSize)
     , _pFirst(nullptr)
     , _pTail(nullptr)
@@ -97,7 +97,7 @@ void LinearAllocator::AddBlock(size_t size)
     
     void* pMemory = ::malloc(totalSize);
 
-    BlockHeader* pBlock = reinterpret_cast<BlockHeader*>(pMemory);
+    BlockHeader* pBlock = static_cast<BlockHeader*>(pMemory);
     pBlock->pCurrent = GetBlockStartPtr(pBlock);
     pBlock->pNext = nullptr;
     pBlock->size = spacePaddedSize;

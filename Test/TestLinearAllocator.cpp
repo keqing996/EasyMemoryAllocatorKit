@@ -4,13 +4,114 @@
 
 #include <iostream>
 #include "Allocator/LinearAllocator.h"
+#include "../Src/Util.hpp"
+#include "Helper.h"
 
-int factorial(int number) { return number <= 1 ? number : factorial(number - 1) * number; }
+LinearAllocator* gAllocator = nullptr;
 
-TEST_CASE("TestExample")
+// Bypass placement new in case of nonexpect platform
+struct AllocatorMarker {};
+inline void* operator new(size_t, AllocatorMarker, void* ptr) { return ptr; }
+inline void operator delete(void*, AllocatorMarker, void*) { }
+
+template<typename T>
+T* CUSTOM_NEW()
 {
-    CHECK(factorial(1) == 1);
-    CHECK(factorial(2) == 2);
-    CHECK(factorial(3) == 6);
-    CHECK(factorial(10) == 3628800);
+    return new (AllocatorMarker(), gAllocator->Allocate(sizeof(T))) T();
+}
+
+template<typename T, typename... Args>
+T* CUSTOM_NEW(Args&&... args)
+{
+    return new (AllocatorMarker(), gAllocator->Allocate(sizeof(T))) T(std::forward<Args>(args)...);
+}
+
+template<typename T>
+void CUSTOM_DELETE(T* p)
+{
+    if (!p)
+        return;
+
+    p->~T();
+    gAllocator->Deallocate(p);
+}
+
+struct AllocatorScope
+{
+    AllocatorScope(size_t blockSize, size_t alignment)
+    {
+        gAllocator = new(::malloc(sizeof(LinearAllocator))) LinearAllocator(blockSize, alignment);
+    }
+
+    ~AllocatorScope()
+    {
+        gAllocator->~LinearAllocator();
+        ::free(gAllocator);
+
+        gAllocator = nullptr;
+    }
+};
+
+TEST_CASE("TestApi")
+{
+    printf("======= Test Basic Creation =======\n");
+
+    size_t alignment = 4;
+    AllocatorScope scope(128, alignment);
+
+    CHECK(gAllocator->GetCurrentBlockNum() == 1);
+
+    auto pFirstBlock = gAllocator->GetFirstBlockPtr();
+    PrintPtrAddr("First block addr:", pFirstBlock);
+
+    auto pStartAddr = gAllocator->GetBlockStartPtr(pFirstBlock);
+    PrintPtrAddr("Block start addr:", pStartAddr);
+
+    size_t blockSize = ToAddr(pStartAddr) - ToAddr(pFirstBlock);
+    CHECK(blockSize == Util::GetPaddedSize<LinearAllocator::BlockHeader>(alignment));
+}
+
+TEST_CASE("TestAllocate")
+{
+    printf("======= Test Basic Allocation =======\n");
+
+    size_t alignment = 4;
+    AllocatorScope scope(128, alignment);
+
+    uint32_t* pUint = CUSTOM_NEW<uint32_t>();
+    *pUint = 0xABCDABCD;
+
+    auto pFirstBlock = gAllocator->GetFirstBlockPtr();
+    PrintPtrAddr("First block addr:", pFirstBlock);
+
+    auto pStartAddr = gAllocator->GetBlockStartPtr(pFirstBlock);
+    PrintPtrAddr("Block start addr:", pStartAddr);
+
+    auto pCurrentAddr = pFirstBlock->pCurrent;
+    PrintPtrAddr("After uint32 Current addr", pCurrentAddr);
+
+    CHECK(ToAddr(pCurrentAddr) == ToAddr(pStartAddr) + Util::UpAlignment(sizeof(uint32_t), alignment));
+    CHECK(ToAddr(pStartAddr) == ToAddr(pUint));
+
+    struct Temp
+    {
+        int a;
+        float b;
+        char c;
+
+        Temp(int aa, float bb, char cc): a(aa), b(bb), c(cc)
+        {
+        }
+    };
+
+    printf("Size of struct: %llu\n", sizeof(Temp));
+
+    void* pLastCurrentAddr = pCurrentAddr;
+    Temp* pTemp = CUSTOM_NEW<Temp>(1, 2.0f, 'x');
+
+    pCurrentAddr = pFirstBlock->pCurrent;
+    PrintPtrAddr("After temp Current addr", pCurrentAddr);
+
+    CHECK(ToAddr(pLastCurrentAddr) == ToAddr(pTemp));
+    CHECK(ToAddr(pCurrentAddr) == ToAddr(pLastCurrentAddr) + Util::UpAlignment(sizeof(Temp), alignment));
 }
