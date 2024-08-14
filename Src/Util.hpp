@@ -19,4 +19,21 @@ public:
     {
         return Util::UpAlignment(sizeof(T), alignment);
     }
+
+    inline static size_t UpAlignmentPowerOfTwo(size_t value)
+    {
+        if (value <= 4)
+            return 4;
+
+        value--;
+        value |= value >> 1;
+        value |= value >> 2;
+        value |= value >> 4;
+        value |= value >> 8;
+        value |= value >> 16;
+        if constexpr (sizeof(size_t) > 4)
+            value |= value >> 32;
+
+        return value + 1;
+    }
 };

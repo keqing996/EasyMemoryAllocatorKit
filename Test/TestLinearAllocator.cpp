@@ -71,12 +71,12 @@ TEST_CASE("TestApi")
     CHECK(blockSize == Util::GetPaddedSize<LinearAllocator::BlockHeader>(alignment));
 }
 
-TEST_CASE("TestAllocate")
+void TestBasicAllocation(size_t alignment, size_t expectAlignment)
 {
-    printf("======= Test Basic Allocation =======\n");
-
-    size_t alignment = 4;
     AllocatorScope scope(128, alignment);
+
+    CHECK(gAllocator->GetCurrentAlignment() == expectAlignment);
+    alignment = gAllocator->GetCurrentAlignment();
 
     uint32_t* pUint = CUSTOM_NEW<uint32_t>();
     *pUint = 0xABCDABCD;
@@ -114,4 +114,19 @@ TEST_CASE("TestAllocate")
 
     CHECK(ToAddr(pLastCurrentAddr) == ToAddr(pTemp));
     CHECK(ToAddr(pCurrentAddr) == ToAddr(pLastCurrentAddr) + Util::UpAlignment(sizeof(Temp), alignment));
+}
+
+TEST_CASE("TestAllocate")
+{
+    printf("======= Test Basic Allocation (align = 4) =======\n");
+
+    TestBasicAllocation(4, 4);
+
+    printf("======= Test Basic Allocation (align = 8) =======\n");
+
+    TestBasicAllocation(8, 8);
+
+    printf("======= Test Basic Allocation (align = 9 -> 16) =======\n");
+
+    TestBasicAllocation(9, 16);
 }
