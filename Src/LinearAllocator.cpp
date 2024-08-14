@@ -11,6 +11,7 @@ LinearAllocator::LinearAllocator(size_t minBlockSize, size_t defaultAlignment)
     , _pFirst(nullptr)
     , _pTail(nullptr)
 {
+    _defaultBlockSize = Util::UpAlignmentPowerOfTwo(_defaultBlockSize);
     AddBlock(_defaultBlockSize);
 }
 

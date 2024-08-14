@@ -52,25 +52,6 @@ struct AllocatorScope
     }
 };
 
-TEST_CASE("TestApi")
-{
-    printf("======= Test Basic Creation =======\n");
-
-    size_t alignment = 4;
-    AllocatorScope scope(128, alignment);
-
-    CHECK(gAllocator->GetCurrentBlockNum() == 1);
-
-    auto pFirstBlock = gAllocator->GetFirstBlockPtr();
-    PrintPtrAddr("First block addr:", pFirstBlock);
-
-    auto pStartAddr = gAllocator->GetBlockStartPtr(pFirstBlock);
-    PrintPtrAddr("Block start addr:", pStartAddr);
-
-    size_t blockSize = ToAddr(pStartAddr) - ToAddr(pFirstBlock);
-    CHECK(blockSize == Util::GetPaddedSize<LinearAllocator::BlockHeader>(alignment));
-}
-
 void TestBasicAllocation(size_t alignment, size_t expectAlignment)
 {
     AllocatorScope scope(128, alignment);
@@ -116,6 +97,25 @@ void TestBasicAllocation(size_t alignment, size_t expectAlignment)
     CHECK(ToAddr(pCurrentAddr) == ToAddr(pLastCurrentAddr) + Util::UpAlignment(sizeof(Temp), alignment));
 }
 
+TEST_CASE("TestApi")
+{
+    printf("======= Test Basic Creation =======\n");
+
+    size_t alignment = 4;
+    AllocatorScope scope(128, alignment);
+
+    CHECK(gAllocator->GetCurrentBlockNum() == 1);
+
+    auto pFirstBlock = gAllocator->GetFirstBlockPtr();
+    PrintPtrAddr("First block addr:", pFirstBlock);
+
+    auto pStartAddr = gAllocator->GetBlockStartPtr(pFirstBlock);
+    PrintPtrAddr("Block start addr:", pStartAddr);
+
+    size_t blockSize = ToAddr(pStartAddr) - ToAddr(pFirstBlock);
+    CHECK(blockSize == Util::GetPaddedSize<LinearAllocator::BlockHeader>(alignment));
+}
+
 TEST_CASE("TestAllocate")
 {
     printf("======= Test Basic Allocation (align = 4) =======\n");
@@ -129,4 +129,40 @@ TEST_CASE("TestAllocate")
     printf("======= Test Basic Allocation (align = 9 -> 16) =======\n");
 
     TestBasicAllocation(9, 16);
+}
+
+TEST_CASE("TestAddBlock")
+{
+    printf("======= Test Add Blcok =======\n");
+
+    size_t alignment = 8;
+    AllocatorScope scope(128, alignment);
+
+    struct Temp
+    {
+        double number[20];
+    };
+
+    printf("Size of struct: %llu\n", sizeof(Temp));
+
+    Temp* pTemp = CUSTOM_NEW<Temp>();
+
+    CHECK(gAllocator->GetCurrentBlockNum() == 2);
+
+    uint32_t* pUint = CUSTOM_NEW<uint32_t>();
+
+    CHECK(gAllocator->GetCurrentBlockNum() == 3);
+
+    auto pFirstBlock = gAllocator->GetFirstBlockPtr();
+    auto pSecondBlock = pFirstBlock->pNext;
+    CHECK(pSecondBlock->size == Util::UpAlignment(sizeof(Temp), alignment));
+
+    auto pThirdBlock = pFirstBlock->pNext->pNext;
+    auto pThirdStart = gAllocator->GetBlockStartPtr(pThirdBlock);
+
+    CHECK(ToAddr(pThirdStart) == ToAddr(pUint));
+
+    Temp* pTemp2 = CUSTOM_NEW<Temp>();
+
+    CHECK(gAllocator->GetCurrentBlockNum() == 4);
 }
