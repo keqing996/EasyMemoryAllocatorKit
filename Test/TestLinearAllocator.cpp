@@ -2,7 +2,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest.h"
 
-#include <iostream>
 #include "Allocator/LinearAllocator.h"
 #include "../Src/Util.hpp"
 #include "Helper.h"

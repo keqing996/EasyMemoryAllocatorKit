@@ -3,13 +3,14 @@
 #include "Util.hpp"
 #include "Allocator/FreeListAllocator.h"
 
-static const size_t MIN_BLOCK_SIZE = 128;
+static constexpr size_t MIN_BLOCK_SIZE = 128;
 
 FreeListAllocator::FreeListAllocator(size_t minBlockSize, size_t defaultAlignment)
-    : _defaultAlignment(defaultAlignment)
+    : _defaultAlignment(Util::UpAlignmentPowerOfTwo(defaultAlignment))
     , _defaultBlockSize(minBlockSize < MIN_BLOCK_SIZE ? MIN_BLOCK_SIZE: minBlockSize)
     , _pFirst(nullptr)
 {
+    _defaultBlockSize = Util::UpAlignmentPowerOfTwo(_defaultBlockSize);
     AddBlock(_defaultBlockSize);
 }
 
@@ -68,7 +69,7 @@ void* FreeListAllocator::Allocate(size_t size, size_t alignment)
 
 void* FreeListAllocator::AllocateFromBlock(const BlockHeader* pBlock, size_t paddedSize)
 {
-    NodeHeader* pCurrentNode = GetBlockFirstNode(pBlock);
+    NodeHeader* pCurrentNode = GetBlockFirstNodePtr(pBlock);
     while (true)
     {
         size_t available = GetNodeAvailableSize(pBlock, pCurrentNode);
@@ -115,6 +116,16 @@ void FreeListAllocator::Deallocate(void* p)
         pNodeHeader->pNext = pNodeHeader->pNext->pNext;
 }
 
+size_t FreeListAllocator::GetCurrentAlignment() const
+{
+    return _defaultAlignment;
+}
+
+size_t FreeListAllocator::GetDefaultBlockSize() const
+{
+    return _defaultBlockSize;
+}
+
 FreeListAllocator::BlockHeader* FreeListAllocator::AddBlock(size_t size)
 {
     size_t spacePaddedSize =  Util::UpAlignment(size, _defaultAlignment);
@@ -151,7 +162,7 @@ void* FreeListAllocator::GetBlockStartPtr(const BlockHeader* pBlock) const
     return reinterpret_cast<void*>(addrBlock + Util::GetPaddedSize<BlockHeader>(_defaultAlignment));
 }
 
-FreeListAllocator::NodeHeader* FreeListAllocator::GetBlockFirstNode(const BlockHeader* pBlock) const
+FreeListAllocator::NodeHeader* FreeListAllocator::GetBlockFirstNodePtr(const BlockHeader* pBlock) const
 {
     return reinterpret_cast<NodeHeader*>(GetBlockStartPtr(pBlock));
 }
@@ -184,4 +195,9 @@ size_t FreeListAllocator::GetNodeAvailableSize(const BlockHeader* pBlock, const 
     {
         return reinterpret_cast<size_t>(pNode->pNext) - reinterpret_cast<size_t>(GetNodeStartPtr(pNode));
     }
+}
+
+const FreeListAllocator::BlockHeader* FreeListAllocator::GetFirstBlockPtr() const
+{
+    return _pFirst;
 }

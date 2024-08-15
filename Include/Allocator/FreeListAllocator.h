@@ -12,12 +12,6 @@ public:
     FreeListAllocator(FreeListAllocator&& rhs) = delete;
 
 public:
-    void* Allocate(size_t size);
-    void* Allocate(size_t size, size_t alignment);
-    void Deallocate(void* p);
-    size_t GetCurrentBlockNum() const;
-
-private:
     struct NodeHeader
     {
         NodeHeader* pNext;
@@ -30,13 +24,27 @@ private:
         size_t size;
     };
 
-    BlockHeader* AddBlock(size_t size);
-    void* AllocateFromBlock(const BlockHeader* pBlock, size_t paddedSize);
+public:
+    // Allocate & Deallocate
+    void* Allocate(size_t size);
+    void* Allocate(size_t size, size_t alignment);
+    void Deallocate(void* p);
 
+    // Getter
+    size_t GetCurrentAlignment() const;
+    size_t GetDefaultBlockSize() const;
+
+    // Block information
+    size_t GetCurrentBlockNum() const;
     void* GetBlockStartPtr(const BlockHeader* pBlock) const;
-    NodeHeader* GetBlockFirstNode(const BlockHeader* pBlock) const;
+    NodeHeader* GetBlockFirstNodePtr(const BlockHeader* pBlock) const;
     void* GetNodeStartPtr(const NodeHeader* pNode) const;
     size_t GetNodeAvailableSize(const BlockHeader* pBlock, const NodeHeader* pNode) const;
+    const BlockHeader* GetFirstBlockPtr() const;
+
+private:
+    BlockHeader* AddBlock(size_t size);
+    void* AllocateFromBlock(const BlockHeader* pBlock, size_t paddedSize);
 
 private:
     size_t _defaultAlignment;
