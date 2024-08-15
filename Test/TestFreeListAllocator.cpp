@@ -50,6 +50,64 @@ struct AllocatorScope
     }
 };
 
+void TestBasicAllocation(size_t alignment, size_t expectAlignment)
+{
+    AllocatorScope scope(128, alignment);
+
+    CHECK(gAllocator->GetCurrentAlignment() == expectAlignment);
+    alignment = gAllocator->GetCurrentAlignment();
+
+    auto pFirstBlock = gAllocator->GetFirstBlockPtr();
+    PrintPtrAddr("First block addr:", pFirstBlock);
+
+    auto pFirstBlockStart = gAllocator->GetBlockStartPtr(pFirstBlock);
+    PrintPtrAddr("First block start addr:", pFirstBlockStart);
+
+    auto pFirstNode = gAllocator->GetBlockFirstNodePtr(pFirstBlock);
+    PrintPtrAddr("First node addr:", pFirstNode);
+
+    auto pFirstNodeStart = gAllocator->GetNodeStartPtr(pFirstNode);
+    PrintPtrAddr("First node start addr:", pFirstNodeStart);
+
+    uint32_t* pUint = CUSTOM_NEW<uint32_t>();
+    *pUint = 0xABCDABCD;
+
+    CHECK(ToAddr(pFirstNodeStart) == ToAddr(pUint));
+    CHECK(pFirstNode->used == true);
+
+    auto pSecondNode = pFirstNode->pNext;
+    PrintPtrAddr("Second node addr:", pSecondNode);
+
+    CHECK(ToAddr(pSecondNode) == ToAddr(pUint) + Util::UpAlignment(sizeof(uint32_t), alignment));
+
+    uint32_t* pUint2 = CUSTOM_NEW<uint32_t>();
+    *pUint2 = 0xABCDABCD;
+
+    CHECK(pFirstNode->used == true);
+
+    auto pThirdNode = pSecondNode->pNext;
+    PrintPtrAddr("Third node addr:", pThirdNode);
+
+    CUSTOM_DELETE(pUint);
+
+    CHECK(pFirstNode->used == false);
+
+    pUint = CUSTOM_NEW<uint32_t>();
+
+    CHECK(ToAddr(pFirstNodeStart) == ToAddr(pUint));
+    CHECK(pFirstNode->used == true);
+    CHECK(pFirstNode->pNext == pSecondNode);
+
+    uint32_t* pUint3 = CUSTOM_NEW<uint32_t>();
+    *pUint3 = 0xABCDABCD;
+
+    CUSTOM_DELETE(pUint);
+    CUSTOM_DELETE(pUint2);
+
+    CHECK(pFirstNode->used == false);
+    CHECK(pFirstNode->pNext == pThirdNode);
+}
+
 TEST_CASE("TestApi")
 {
     printf("======= Test Basic Creation =======\n");
@@ -78,5 +136,20 @@ TEST_CASE("TestApi")
     size_t nodeSize = ToAddr(pNodeStartAddr) - ToAddr(pFirstNode);
     printf("Node size: %zu\n", nodeSize);
     CHECK(nodeSize == Util::GetPaddedSize<FreeListAllocator::NodeHeader>(alignment));
+}
+
+TEST_CASE("TestAllocate")
+{
+    printf("======= Test Basic Allocation (align = 4) =======\n");
+
+    TestBasicAllocation(4, 4);
+
+    printf("======= Test Basic Allocation (align = 8) =======\n");
+
+    TestBasicAllocation(8, 8);
+
+    printf("======= Test Basic Allocation (align = 9 -> 16) =======\n");
+
+    TestBasicAllocation(9, 16);
 }
 

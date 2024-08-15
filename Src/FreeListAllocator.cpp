@@ -84,14 +84,19 @@ void* FreeListAllocator::AllocateFromBlock(const BlockHeader* pBlock, size_t pad
                     reinterpret_cast<size_t>(GetNodeStartPtr(pCurrentNode)) + paddedSize);
                 
                 pNextFreeNode->used = false;
+                pNextFreeNode->pPrev = pCurrentNode;
                 if (pCurrentNode->pNext != nullptr)
+                {
+                    pCurrentNode->pNext->pPrev = pNextFreeNode;
                     pNextFreeNode->pNext = pCurrentNode->pNext;
+                }
                 else
                     pNextFreeNode->pNext = nullptr;
                 
                 pCurrentNode->pNext = pNextFreeNode;
             }
 
+            pCurrentNode->used = true;
             return GetNodeStartPtr(pCurrentNode);
         }
 
@@ -112,8 +117,21 @@ void FreeListAllocator::Deallocate(void* p)
     pNodeHeader->used = false;
 
     // Merge unused block
-    while (pNodeHeader->pNext != nullptr && !pNodeHeader->pNext->used)
-        pNodeHeader->pNext = pNodeHeader->pNext->pNext;
+    auto pBeginMergeNode = pNodeHeader;
+
+    while (pBeginMergeNode->pPrev != nullptr && !pBeginMergeNode->used)
+        pBeginMergeNode = pBeginMergeNode->pPrev;
+
+    while (pBeginMergeNode->pNext != nullptr)
+    {
+        if (pBeginMergeNode->pNext->used)
+        {
+            pBeginMergeNode->pNext->pPrev = pBeginMergeNode;
+            break;
+        }
+
+        pBeginMergeNode->pNext = pBeginMergeNode->pNext->pNext;
+    }
 }
 
 size_t FreeListAllocator::GetCurrentAlignment() const
@@ -140,6 +158,7 @@ FreeListAllocator::BlockHeader* FreeListAllocator::AddBlock(size_t size)
     pBlock->size = spacePaddedSize;
 
     pFirstNode->pNext = nullptr;
+    pFirstNode->pPrev = nullptr;
     pFirstNode->used = false;
 
     if (_pFirst == nullptr)
