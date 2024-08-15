@@ -27,4 +27,5 @@ if (ENABLE_ALLOCATOR_TEST)
 
     add_executable          (test_free_list_allocator Test/TestFreeListAllocator.cpp)
     target_link_libraries   (test_free_list_allocator lib_allocator)
+    add_test                (NAME test_free_list_allocator COMMAND test_free_list_allocator)
 endif ()
