@@ -132,6 +132,30 @@ void FreeListAllocator::Deallocate(void* p)
 
         pBeginMergeNode->pNext = pBeginMergeNode->pNext->pNext;
     }
+
+    // If block is empty, release block
+    if (pBeginMergeNode->pPrev == nullptr && pBeginMergeNode->pNext == nullptr)
+    {
+        size_t addrNode = reinterpret_cast<size_t>(pBeginMergeNode);
+        BlockHeader* pBlockHeaderToBeDeleted = reinterpret_cast<BlockHeader*>(addrNode - Util::GetPaddedSize<BlockHeader>(_defaultAlignment));
+
+        // Can not delete first block
+        if (pBlockHeaderToBeDeleted != _pFirst)
+        {
+            BlockHeader* pCurrentBlock = _pFirst;
+            while (pCurrentBlock->pNext != nullptr)
+            {
+                if (pCurrentBlock->pNext == pBlockHeaderToBeDeleted)
+                {
+                    pCurrentBlock->pNext = pCurrentBlock->pNext->pNext;
+                    ::free(pBlockHeaderToBeDeleted);
+                    break;
+                }
+
+                pCurrentBlock = pCurrentBlock->pNext;
+            }
+        }
+    }
 }
 
 size_t FreeListAllocator::GetCurrentAlignment() const

@@ -132,7 +132,7 @@ TEST_CASE("TestAllocate")
 
 TEST_CASE("TestAddBlock")
 {
-    printf("======= Test Add Blcok =======\n");
+    printf("======= Test Add Block =======\n");
 
     size_t alignment = 8;
     AllocatorScope scope(128, alignment);

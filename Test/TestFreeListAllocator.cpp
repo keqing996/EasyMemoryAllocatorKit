@@ -153,3 +153,69 @@ TEST_CASE("TestAllocate")
     TestBasicAllocation(9, 16);
 }
 
+TEST_CASE("TestAddBlock")
+{
+    printf("======= Test Add Block =======\n");
+
+    size_t alignment = 8;
+    AllocatorScope scope(128, alignment);
+
+    struct Temp
+    {
+        uint32_t data[10];
+    };
+
+    // block1: Node(24B) -> Data(40B) -> Padding(64B)
+    Temp* pTemp1 = CUSTOM_NEW<Temp>();
+
+    // block1: Node(24B) -> Data(40B) -> Node(24B) -> Data(40B)
+    Temp* pTemp2 = CUSTOM_NEW<Temp>();
+    CHECK(gAllocator->GetCurrentBlockNum() == 1);
+
+    // block1: Node(24B) -> Data(40B) -> Node(24B) -> Data(40B)
+    // block2: Node(24B) -> Data(40B) -> Padding(64B)
+    Temp* pTemp3 = CUSTOM_NEW<Temp>();
+
+    // block1: Node(24B) -> Data(40B) -> Node(24B) -> Data(40B)
+    // block2: Node(24B) -> Data(40B) -> Node(24B) -> Data(40B)
+    Temp* pTemp4 = CUSTOM_NEW<Temp>();
+
+    CHECK(gAllocator->GetCurrentBlockNum() == 2);
+
+    // block1: Node(24B) -> Data(40B) -> Node(24B) -> Data(40B)
+    // block2: Node(24B) -> Data(40B) -> Node(24B) -> Data(40B)
+    // block3: Node(24B) -> Data(40B) -> Padding(64B)
+    Temp* pTemp5 = CUSTOM_NEW<Temp>();
+
+    CHECK(gAllocator->GetCurrentBlockNum() == 3);
+
+    CUSTOM_DELETE(pTemp1);
+    CUSTOM_DELETE(pTemp2);
+
+    CHECK(gAllocator->GetCurrentBlockNum() == 3);
+
+    CUSTOM_DELETE(pTemp3);
+    CUSTOM_DELETE(pTemp4);
+
+    CHECK(gAllocator->GetCurrentBlockNum() == 2);
+
+    CUSTOM_DELETE(pTemp5);
+
+    CHECK(gAllocator->GetCurrentBlockNum() == 1);
+}
+
+/*
+
+TEST_CASE("TestAll")
+{
+    printf("======= Test All =======\n");
+
+    size_t alignment = 8;
+    AllocatorScope scope(128, alignment);
+
+    size_t nodeHeaderSize = Util::GetPaddedSize<FreeListAllocator::BlockHeader>(alignment);
+
+}
+
+*/
+
