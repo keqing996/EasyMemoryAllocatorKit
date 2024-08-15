@@ -14,6 +14,7 @@ public:
 public:
     struct NodeHeader
     {
+        NodeHeader* pPrev;
         NodeHeader* pNext;
         bool used;
     };
