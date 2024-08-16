@@ -8,6 +8,9 @@ public:
     Util() = delete;
 
 public:
+    static constexpr size_t HIGHEST_BIT_MASK = static_cast<size_t>(1) << (sizeof(size_t) * CHAR_BIT - 1);
+
+public:
     
     inline static size_t UpAlignment(size_t size, size_t alignment)
     {
