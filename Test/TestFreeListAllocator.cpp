@@ -204,6 +204,74 @@ TEST_CASE("TestAddBlock")
     CHECK(gAllocator->GetCurrentBlockNum() == 1);
 }
 
+TEST_CASE("TestSplitAndMerge")
+{
+    printf("======= Test Split & Merge =======\n");
+
+    size_t alignment = 8;
+    AllocatorScope scope(256, alignment);
+
+    size_t nodeHeaderSize = Util::GetPaddedSize<FreeListAllocator::NodeHeader>(alignment);
+
+    struct Data16B { uint8_t data[16]; };
+
+    // block1: Node(24B) -> Data(16B) -> Node(24B) -> Padding(192B)
+    Data16B* pTestData1 = CUSTOM_NEW<Data16B>();
+
+    // block1: Node(24B) -> Data(16B) -> Node(24B) -> Data(16B) -> Node(24B) -> Padding(152B)
+    Data16B* pTestData2 = CUSTOM_NEW<Data16B>();
+
+    // block1: Node(24B) -> Data(16B) -> Node(24B) -> Data(16B) -> Node(24B) -> Data(16B) -> Node(24B) -> Padding(112B)
+    Data16B* pTestData3 = CUSTOM_NEW<Data16B>();
+
+    // block1: Node(24B) -> Data(16B) -> Node(24B) -> Data(16B) -> Node(24B) -> Data(16B) -> Node(24B)
+    //       -> Data(16B) -> Node(24B) -> Padding(72B)
+    Data16B* pTestData4 = CUSTOM_NEW<Data16B>();
+
+    // block1: Node(24B) -> Data(16B) -> Node(24B) -> Data(16B) -> Node(24B) -> Data(16B) -> Node(24B)
+    //       -> Data(16B) -> Node(24B) -> Data(16B) -> Node(24B) -> Padding(32B)
+    Data16B* pTestData5 = CUSTOM_NEW<Data16B>();
+
+    // block1: Node(24B) -> Data(16B) -> Node(24B) -> Data(16B) -> Node(24B) -> Free(16B) -> Node(24B)
+    //       -> Data(16B) -> Node(24B) -> Data(16B) -> Node(24B) -> Padding(32B)
+    CUSTOM_DELETE(pTestData3);
+
+    // block1: Node(24B) -> Data(16B) -> Node(24B) -> Free(56B) -> Node(24B) -> Data(16B) -> Node(24B)
+    //       -> Data(16B) -> Node(24B) -> Padding(32B)
+    CUSTOM_DELETE(pTestData2);
+
+    // block1: Node(24B) -> Data(16B) -> Node(24B) -> Free(96B)  -> Node(24B) -> Data(16B) -> Node(24B) -> Padding(32B)
+    CUSTOM_DELETE(pTestData4);
+
+    auto pFirstBlock = gAllocator->GetFirstBlockPtr();
+    auto pFirstNode = gAllocator->GetBlockFirstNodePtr(pFirstBlock);
+
+    CHECK(pFirstNode->used == true);
+    CHECK(pFirstNode->pPrev == nullptr);
+
+    auto pSecondNode = pFirstNode->pNext;
+    CHECK(pSecondNode->used == false);
+    CHECK(pSecondNode->pPrev == pFirstNode);
+
+    auto pThirdNode = pSecondNode->pNext;
+    CHECK(pThirdNode->used == true);
+    CHECK(pThirdNode->pPrev == pSecondNode);
+
+    auto pFourthNode = pThirdNode->pNext;
+    CHECK(pFourthNode->used == false);
+    CHECK(pFourthNode->pPrev == pThirdNode);
+    CHECK(pFourthNode->pNext == nullptr);
+
+    size_t freeGapSize = 2 * nodeHeaderSize + 3 * sizeof(Data16B);
+
+    CHECK(ToAddr(pFirstNode) + nodeHeaderSize + sizeof(Data16B) == ToAddr(pSecondNode));
+    CHECK(ToAddr(pSecondNode) + nodeHeaderSize + freeGapSize == ToAddr(pThirdNode));
+    CHECK(ToAddr(pThirdNode) + nodeHeaderSize + sizeof(Data16B) == ToAddr(pFourthNode));
+
+    CUSTOM_DELETE(pTestData1);
+    CUSTOM_DELETE(pTestData5);
+}
+
 TEST_CASE("TestAll")
 {
     printf("======= Test All =======\n");
