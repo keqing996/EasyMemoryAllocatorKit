@@ -204,8 +204,6 @@ TEST_CASE("TestAddBlock")
     CHECK(gAllocator->GetCurrentBlockNum() == 1);
 }
 
-/*
-
 TEST_CASE("TestAll")
 {
     printf("======= Test All =======\n");
@@ -213,9 +211,136 @@ TEST_CASE("TestAll")
     size_t alignment = 8;
     AllocatorScope scope(128, alignment);
 
-    size_t nodeHeaderSize = Util::GetPaddedSize<FreeListAllocator::BlockHeader>(alignment);
+    size_t nodeHeaderSize = Util::GetPaddedSize<FreeListAllocator::NodeHeader>(alignment);
 
+    struct Data16B { uint8_t data[16]; };
+    struct Data24B { uint8_t data[24]; };
+    struct Data32B { uint8_t data[32]; };
+    struct Data64B { uint8_t data[64]; };
+
+    // block1: Node(24B) -> Data(16B) -> Node(24B) -> Padding(64B)
+    Data16B* pBlock1Data16_1 = CUSTOM_NEW<Data16B>();
+
+    {
+        CHECK(gAllocator->GetCurrentBlockNum() == 1);
+
+        auto pFirstBlock = gAllocator->GetFirstBlockPtr();
+        auto pFirstNode = gAllocator->GetBlockFirstNodePtr(pFirstBlock);
+
+        CHECK(pFirstNode->used == true);
+
+        auto pSecondNode = pFirstNode->pNext;
+
+        CHECK(pSecondNode->used == false);
+        CHECK(pSecondNode->pNext == nullptr);
+        CHECK(pSecondNode->pPrev == pFirstNode);
+        CHECK(ToAddr(pFirstNode) + nodeHeaderSize + sizeof(Data16B) == ToAddr(pSecondNode));
+    }
+
+    // block1: Node(24B) -> Data(16B) -> Node(24B) -> Data(24B) -> Node(24B) -> Padding(16B)
+    Data24B* pBlock1Data24_1 = CUSTOM_NEW<Data24B>();
+
+    {
+        CHECK(gAllocator->GetCurrentBlockNum() == 1);
+
+        auto pFirstBlock = gAllocator->GetFirstBlockPtr();
+        auto pFirstNode = gAllocator->GetBlockFirstNodePtr(pFirstBlock);
+
+        CHECK(pFirstNode->used == true);
+
+        auto pSecondNode = pFirstNode->pNext;
+
+        CHECK(pSecondNode->used == true);
+        CHECK(pSecondNode->pPrev == pFirstNode);
+        CHECK(ToAddr(pFirstNode) + nodeHeaderSize + sizeof(Data16B) == ToAddr(pSecondNode));
+
+        auto pThirdNode = pSecondNode->pNext;
+
+        CHECK(pThirdNode->used == false);
+        CHECK(pThirdNode->pNext == nullptr);
+        CHECK(pThirdNode->pPrev == pSecondNode);
+        CHECK(ToAddr(pSecondNode) + nodeHeaderSize + sizeof(Data24B) == ToAddr(pThirdNode));
+    }
+
+    // block1: Node(24B) -> Data(16B) -> Node(24B) -> Data(24B) -> Node(24B) -> Padding(16B)
+    // block2: Node(24B) -> Data(32B) -> Node(24B) -> Padding(48B)
+    Data32B* pBlock2Data32_1 = CUSTOM_NEW<Data32B>();
+
+    {
+        CHECK(gAllocator->GetCurrentBlockNum() == 2);
+
+        auto pFirstBlock = gAllocator->GetFirstBlockPtr();
+        auto pSecondBlock = pFirstBlock->pNext;
+
+        auto pFirstNode = gAllocator->GetBlockFirstNodePtr(pSecondBlock);
+
+        CHECK(pFirstNode->used == true);
+
+        auto pSecondNode = pFirstNode->pNext;
+
+        CHECK(pSecondNode->used == false);
+        CHECK(pSecondNode->pNext == nullptr);
+        CHECK(pSecondNode->pPrev == pFirstNode);
+        CHECK(ToAddr(pFirstNode) + nodeHeaderSize + sizeof(Data32B) == ToAddr(pSecondNode));
+    }
+
+    // block1: Node(24B) -> Data(16B) -> Node(24B) -> Data(24B) -> Node(24B) -> Padding(16B)
+    // block2: Node(24B) -> Data(32B) -> Node(24B) -> Padding(48B)
+    // block3: Node(24B) -> Data(64B) -> Node(24B) -> Padding(16B)
+    Data64B* pBlock3Data64_1 = CUSTOM_NEW<Data64B>();
+
+    {
+        CHECK(gAllocator->GetCurrentBlockNum() == 3);
+    }
+
+
+    // block1: Node(24B) -> Data(16B) -> Node(24B) -> Padding(64B)
+    // block2: Node(24B) -> Data(32B) -> Node(24B) -> Padding(48B)
+    // block3: Node(24B) -> Data(64B) -> Node(24B) -> Padding(16B)
+    CUSTOM_DELETE(pBlock1Data24_1);
+
+    {
+        CHECK(gAllocator->GetCurrentBlockNum() == 3);
+
+        auto pFirstBlock = gAllocator->GetFirstBlockPtr();
+        auto pFirstNode = gAllocator->GetBlockFirstNodePtr(pFirstBlock);
+
+        CHECK(pFirstNode->used == true);
+
+        auto pSecondNode = pFirstNode->pNext;
+
+        CHECK(pSecondNode->used == false);
+        CHECK(pSecondNode->pNext == nullptr);
+        CHECK(pSecondNode->pPrev == pFirstNode);
+    }
+
+    // block1: Node(24B) -> Data(16B) -> Node(24B) -> Padding(64B)
+    // block3: Node(24B) -> Data(64B) -> Node(24B) -> Padding(16B)
+    CUSTOM_DELETE(pBlock2Data32_1);
+
+    {
+        CHECK(gAllocator->GetCurrentBlockNum() == 2);
+    }
+
+    // block1: Node(24B) -> Padding(104B)
+    // block3: Node(24B) -> Data(64B) -> Node(24B) -> Padding(16B)
+    CUSTOM_DELETE(pBlock1Data16_1);
+
+    {
+        CHECK(gAllocator->GetCurrentBlockNum() == 2);
+
+        auto pFirstBlock = gAllocator->GetFirstBlockPtr();
+        auto pFirstNode = gAllocator->GetBlockFirstNodePtr(pFirstBlock);
+
+        CHECK(pFirstNode->used == false);
+        CHECK(pFirstNode->pNext == nullptr);
+    }
+
+    // block1: Node(24B) -> Padding(104B)
+    CUSTOM_DELETE(pBlock3Data64_1);
+
+    {
+        CHECK(gAllocator->GetCurrentBlockNum() == 1);
+    }
 }
-
-*/
 
