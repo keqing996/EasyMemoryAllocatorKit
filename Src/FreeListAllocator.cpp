@@ -119,7 +119,7 @@ void FreeListAllocator::Deallocate(void* p)
     // Merge unused block
     auto pBeginMergeNode = pNodeHeader;
 
-    while (pBeginMergeNode->pPrev != nullptr && !pBeginMergeNode->used)
+    while (pBeginMergeNode->pPrev != nullptr && !pBeginMergeNode->pPrev->used)
         pBeginMergeNode = pBeginMergeNode->pPrev;
 
     while (pBeginMergeNode->pNext != nullptr)
