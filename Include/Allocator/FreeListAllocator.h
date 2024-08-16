@@ -12,11 +12,19 @@ public:
     FreeListAllocator(FreeListAllocator&& rhs) = delete;
 
 public:
-    struct NodeHeader
+    class NodeHeader
     {
-        NodeHeader* pPrev;
-        NodeHeader* pNext;
-        bool used;
+    public:
+        size_t GetSize() const;
+        void SetSize(size_t size);
+        bool Used() const;
+        void SetUsed(bool used);
+        NodeHeader* GetPrevNode() const;
+        void SetPrevNode(NodeHeader* prev);
+
+    private:
+        NodeHeader* _pPrev;
+        size_t _usedAndSize;
     };
 
     struct BlockHeader
@@ -40,12 +48,14 @@ public:
     void* GetBlockStartPtr(const BlockHeader* pBlock) const;
     NodeHeader* GetBlockFirstNodePtr(const BlockHeader* pBlock) const;
     void* GetNodeStartPtr(const NodeHeader* pNode) const;
-    size_t GetNodeAvailableSize(const BlockHeader* pBlock, const NodeHeader* pNode) const;
     const BlockHeader* GetFirstBlockPtr() const;
+    NodeHeader* GetNodeNext(const BlockHeader* pBlock, const NodeHeader* pNode) const;
+    NodeHeader* GetNodeNext(const NodeHeader* pNode) const;
 
 private:
     BlockHeader* AddBlock(size_t size);
     void* AllocateFromBlock(const BlockHeader* pBlock, size_t paddedSize);
+    BlockHeader* GetNodeParentBlockPtr(const NodeHeader* pNode) const;
 
 private:
     size_t _defaultAlignment;

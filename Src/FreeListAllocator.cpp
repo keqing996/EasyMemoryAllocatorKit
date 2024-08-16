@@ -39,6 +39,39 @@ size_t FreeListAllocator::GetCurrentBlockNum() const
     return result;
 }
 
+size_t FreeListAllocator::NodeHeader::GetSize() const
+{
+    return _usedAndSize & ~Util::HIGHEST_BIT_MASK;
+}
+
+void FreeListAllocator::NodeHeader::SetSize(size_t size)
+{
+    _usedAndSize = (_usedAndSize & Util::HIGHEST_BIT_MASK) | (size & ~Util::HIGHEST_BIT_MASK);
+}
+
+bool FreeListAllocator::NodeHeader::Used() const
+{
+    return (_usedAndSize & Util::HIGHEST_BIT_MASK) != 0;
+}
+
+void FreeListAllocator::NodeHeader::SetUsed(bool used)
+{
+    if (used)
+        _usedAndSize |= Util::HIGHEST_BIT_MASK;
+    else
+        _usedAndSize &= ~Util::HIGHEST_BIT_MASK;
+}
+
+FreeListAllocator::NodeHeader* FreeListAllocator::NodeHeader::GetPrevNode() const
+{
+    return _pPrev;
+}
+
+void FreeListAllocator::NodeHeader::SetPrevNode(NodeHeader* prev)
+{
+    _pPrev = prev;
+}
+
 void* FreeListAllocator::Allocate(size_t size)
 {
     return Allocate(size, _defaultAlignment);
@@ -72,40 +105,51 @@ void* FreeListAllocator::AllocateFromBlock(const BlockHeader* pBlock, size_t pad
     NodeHeader* pCurrentNode = GetBlockFirstNodePtr(pBlock);
     while (true)
     {
-        size_t available = GetNodeAvailableSize(pBlock, pCurrentNode);
-        if (available >= paddedSize)
-        {
-            // If left size is enough to place another NodeHeader, we create a new
-            // free node.
-            size_t leftSize = available - paddedSize;
-            if (leftSize > Util::GetPaddedSize<NodeHeader>(_defaultAlignment))
-            {
-                NodeHeader* pNextFreeNode = reinterpret_cast<NodeHeader*>(
-                    reinterpret_cast<size_t>(GetNodeStartPtr(pCurrentNode)) + paddedSize);
-                
-                pNextFreeNode->used = false;
-                pNextFreeNode->pPrev = pCurrentNode;
-                if (pCurrentNode->pNext != nullptr)
-                {
-                    pCurrentNode->pNext->pPrev = pNextFreeNode;
-                    pNextFreeNode->pNext = pCurrentNode->pNext;
-                }
-                else
-                    pNextFreeNode->pNext = nullptr;
-                
-                pCurrentNode->pNext = pNextFreeNode;
-            }
-
-            pCurrentNode->used = true;
-            return GetNodeStartPtr(pCurrentNode);
-        }
-
         // All node in this block are used, so return nullptr to find in next block.
-        if (pCurrentNode->pNext == nullptr)
+        if (pCurrentNode == nullptr)
             return nullptr;
 
-        pCurrentNode = pCurrentNode->pNext;
+        // This node is allocated, check next node.
+        if (pCurrentNode->Used() == true)
+        {
+            pCurrentNode = GetNodeNext(pBlock, pCurrentNode);
+            continue;
+        }
+
+        // This node's size is insufficient, check next node.
+        size_t available = pCurrentNode->GetSize();
+        if (available < paddedSize)
+        {
+            pCurrentNode = GetNodeNext(pBlock, pCurrentNode);
+            continue;
+        }
+
+        // If left size is enough to place another NodeHeader, we create a new free node.
+        size_t leftSize = available - paddedSize;
+        if (leftSize > Util::GetPaddedSize<NodeHeader>(_defaultAlignment))
+        {
+            NodeHeader* pNextFreeNode = reinterpret_cast<NodeHeader*>(
+                reinterpret_cast<size_t>(GetNodeStartPtr(pCurrentNode)) + paddedSize);
+
+            pCurrentNode->SetSize(paddedSize);
+
+            pNextFreeNode->SetUsed(false);
+            pNextFreeNode->SetSize(leftSize);
+            pNextFreeNode->SetPrevNode(pCurrentNode);
+        }
+
+        pCurrentNode->SetUsed(true);
+        return GetNodeStartPtr(pCurrentNode);
     }
+}
+
+FreeListAllocator::BlockHeader* FreeListAllocator::GetNodeParentBlockPtr(const NodeHeader* pNode) const
+{
+    while (pNode->GetPrevNode() != nullptr)
+        pNode = pNode->GetPrevNode();
+
+    size_t addrNode = reinterpret_cast<size_t>(pNode);
+    return reinterpret_cast<BlockHeader*>(addrNode - Util::GetPaddedSize<BlockHeader>(_defaultAlignment));
 }
 
 void FreeListAllocator::Deallocate(void* p)
@@ -113,47 +157,43 @@ void FreeListAllocator::Deallocate(void* p)
     NodeHeader* pNodeHeader = reinterpret_cast<NodeHeader*>(
         reinterpret_cast<size_t>(p) - Util::GetPaddedSize<NodeHeader>(_defaultAlignment));
 
-    // Maek this block unused
-    pNodeHeader->used = false;
+    // Mark this block unused
+    pNodeHeader->SetUsed(false);
 
     // Merge unused block
     auto pBeginMergeNode = pNodeHeader;
 
-    while (pBeginMergeNode->pPrev != nullptr && !pBeginMergeNode->pPrev->used)
-        pBeginMergeNode = pBeginMergeNode->pPrev;
+    while (pBeginMergeNode->GetPrevNode() != nullptr && !pBeginMergeNode->GetPrevNode()->Used())
+        pBeginMergeNode = pBeginMergeNode->GetPrevNode();
 
-    while (pBeginMergeNode->pNext != nullptr)
+    auto pBlock = GetNodeParentBlockPtr(pBeginMergeNode);
+    while (true)
     {
-        if (pBeginMergeNode->pNext->used)
-        {
-            pBeginMergeNode->pNext->pPrev = pBeginMergeNode;
+        auto pNextNode = GetNodeNext(pBlock, pBeginMergeNode);
+        if (pNextNode == nullptr || pNextNode->Used())
             break;
-        }
 
-        pBeginMergeNode->pNext = pBeginMergeNode->pNext->pNext;
+        size_t size = pBeginMergeNode->GetSize();
+        size += Util::GetPaddedSize<NodeHeader>(_defaultAlignment) + pNextNode->GetSize();
+        pBeginMergeNode->SetSize(size);
     }
 
-    // If block is empty, release block
-    if (pBeginMergeNode->pPrev == nullptr && pBeginMergeNode->pNext == nullptr)
+    // If block is empty and this block is not the first block, free the memory of this block.
+    if (pBeginMergeNode->GetPrevNode() == nullptr
+        && pBeginMergeNode->GetSize() + Util::GetPaddedSize<NodeHeader>(_defaultAlignment) == pBlock->size
+        && pBlock != _pFirst)
     {
-        size_t addrNode = reinterpret_cast<size_t>(pBeginMergeNode);
-        BlockHeader* pBlockHeaderToBeDeleted = reinterpret_cast<BlockHeader*>(addrNode - Util::GetPaddedSize<BlockHeader>(_defaultAlignment));
-
-        // Can not delete first block
-        if (pBlockHeaderToBeDeleted != _pFirst)
+        BlockHeader* pCurrentBlock = _pFirst;
+        while (pCurrentBlock->pNext != nullptr)
         {
-            BlockHeader* pCurrentBlock = _pFirst;
-            while (pCurrentBlock->pNext != nullptr)
+            if (pCurrentBlock->pNext == pBlock)
             {
-                if (pCurrentBlock->pNext == pBlockHeaderToBeDeleted)
-                {
-                    pCurrentBlock->pNext = pCurrentBlock->pNext->pNext;
-                    ::free(pBlockHeaderToBeDeleted);
-                    break;
-                }
-
-                pCurrentBlock = pCurrentBlock->pNext;
+                pCurrentBlock->pNext = pCurrentBlock->pNext->pNext;
+                ::free(pBlock);
+                break;
             }
+
+            pCurrentBlock = pCurrentBlock->pNext;
         }
     }
 }
@@ -181,9 +221,9 @@ FreeListAllocator::BlockHeader* FreeListAllocator::AddBlock(size_t size)
     pBlock->pNext = nullptr;
     pBlock->size = spacePaddedSize;
 
-    pFirstNode->pNext = nullptr;
-    pFirstNode->pPrev = nullptr;
-    pFirstNode->used = false;
+    pFirstNode->SetPrevNode(nullptr);
+    pFirstNode->SetUsed(false);
+    pFirstNode->SetSize(spacePaddedSize - Util::GetPaddedSize<NodeHeader>(_defaultAlignment));
 
     if (_pFirst == nullptr)
         _pFirst = pBlock;
@@ -216,28 +256,23 @@ void* FreeListAllocator::GetNodeStartPtr(const NodeHeader* pNode) const
     return reinterpret_cast<void*>(addrNode + Util::GetPaddedSize<NodeHeader>(_defaultAlignment));
 }
 
-size_t FreeListAllocator::GetNodeAvailableSize(const BlockHeader* pBlock, const NodeHeader* pNode) const
+FreeListAllocator::NodeHeader* FreeListAllocator::GetNodeNext(const BlockHeader* pBlock, const NodeHeader* pNode) const
 {
-    if (pNode == nullptr)
-        return 0;
+    if (pBlock == nullptr || pNode == nullptr)
+        return nullptr;
 
-    if (pNode->used)
-        return 0;
+    size_t addrBlockEnd = reinterpret_cast<size_t>(GetBlockStartPtr(pBlock)) + pBlock->size;
+    size_t addrNodeEnd = reinterpret_cast<size_t>(GetNodeStartPtr(pNode)) + pNode->GetSize();
+    if (addrNodeEnd + Util::GetPaddedSize<NodeHeader>(_defaultAlignment) < addrBlockEnd)
+        return reinterpret_cast<NodeHeader*>(addrNodeEnd);
 
-    // When this node is the last node of this block, so available range is 
-    // from this node's address to block's end.
-    if (pNode->pNext == nullptr)
-    {
-        void* pBlockStartPtr = GetBlockStartPtr(pBlock);
-        size_t pBlockEndAddr = reinterpret_cast<size_t>(pBlockStartPtr) + pBlock->size;
-        return pBlockEndAddr - reinterpret_cast<size_t>(GetNodeStartPtr(pNode));
-    }
-    // When this node is not the last node of this block, available range is
-    // from this node's start address to next node's header address.
-    else
-    {
-        return reinterpret_cast<size_t>(pNode->pNext) - reinterpret_cast<size_t>(GetNodeStartPtr(pNode));
-    }
+    return nullptr;
+}
+
+FreeListAllocator::NodeHeader* FreeListAllocator::GetNodeNext(const NodeHeader* pNode) const
+{
+    auto pBlock = GetNodeParentBlockPtr(pNode);
+    return GetNodeNext(pBlock, pNode);
 }
 
 const FreeListAllocator::BlockHeader* FreeListAllocator::GetFirstBlockPtr() const
