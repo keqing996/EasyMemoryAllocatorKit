@@ -12,7 +12,7 @@ FreeListAllocator::FreeListAllocator(size_t minBlockSize, size_t defaultAlignmen
     , _pFirst(nullptr)
 {
     _defaultBlockSize = Util::UpAlignmentPowerOfTwo(_defaultBlockSize);
-    AddBlock(_defaultBlockSize);
+    AddBlock();
 }
 
 FreeListAllocator::~FreeListAllocator()
@@ -95,8 +95,7 @@ void* FreeListAllocator::Allocate(size_t size, size_t alignment)
         pCurrentBlock = pCurrentBlock->pNext;
     }
 
-    size_t newBlockSize = alignedSize > _defaultBlockSize ? alignedSize : _defaultBlockSize;
-    pCurrentBlock = AddBlock(newBlockSize);
+    pCurrentBlock = AddBlock(alignedSize);
 
     return AllocateFromBlock(pCurrentBlock, alignedSize);
 }
@@ -214,22 +213,27 @@ size_t FreeListAllocator::GetDefaultBlockSize() const
     return _defaultBlockSize;
 }
 
-FreeListAllocator::BlockHeader* FreeListAllocator::AddBlock(size_t size)
+FreeListAllocator::BlockHeader* FreeListAllocator::AddBlock(size_t requiredSize)
 {
-    size_t spacePaddedSize =  Util::UpAlignment(size, _defaultAlignment);
-    size_t totalSize = spacePaddedSize + Util::GetPaddedSize<BlockHeader>(_defaultAlignment);
+    // Get the minimum size should be allocated = required size from outside + one node header.
+    size_t minimumRequiredSize = requiredSize + Util::GetPaddedSize<NodeHeader>(_defaultAlignment);
+
+    // The content size of block is at least Default Block Size.
+    size_t blockContentSize = minimumRequiredSize > _defaultBlockSize ? minimumRequiredSize : _defaultBlockSize;
+
+    // Total allocate size = block header + block content
+    size_t totalSize = blockContentSize + Util::GetPaddedSize<BlockHeader>(_defaultAlignment);
 
     void* pMemory = ::malloc(totalSize);
 
     BlockHeader* pBlock = reinterpret_cast<BlockHeader*>(pMemory);
-    NodeHeader* pFirstNode = reinterpret_cast<NodeHeader*>(GetBlockStartPtr(pBlock));
-
     pBlock->pNext = nullptr;
-    pBlock->size = spacePaddedSize;
+    pBlock->size = blockContentSize;
 
+    NodeHeader* pFirstNode = reinterpret_cast<NodeHeader*>(GetBlockStartPtr(pBlock));
     pFirstNode->SetPrevNode(nullptr);
     pFirstNode->SetUsed(false);
-    pFirstNode->SetSize(spacePaddedSize - Util::GetPaddedSize<NodeHeader>(_defaultAlignment));
+    pFirstNode->SetSize(blockContentSize - Util::GetPaddedSize<NodeHeader>(_defaultAlignment));
 
     if (_pFirst == nullptr)
         _pFirst = pBlock;

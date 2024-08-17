@@ -53,7 +53,7 @@ public:
     NodeHeader* GetNodeNext(const NodeHeader* pNode) const;
 
 private:
-    BlockHeader* AddBlock(size_t size);
+    BlockHeader* AddBlock(size_t requiredSize = 0);
     void* AllocateFromBlock(const BlockHeader* pBlock, size_t paddedSize);
     BlockHeader* GetNodeParentBlockPtr(const NodeHeader* pNode) const;
 

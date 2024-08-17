@@ -11,13 +11,13 @@ StackAllocator::StackAllocator(size_t minBlockSize, size_t defaultAlignment)
     , _defaultBlockSize(minBlockSize < MIN_BLOCK_SIZE ? MIN_BLOCK_SIZE: minBlockSize)
     , _pFirst(nullptr)
     , _pStackTopBlock(nullptr)
-    , _pStackTop(nullptr)
+    , _pStackTopFrame(nullptr)
 {
     _defaultBlockSize = Util::UpAlignmentPowerOfTwo(_defaultBlockSize);
     AddBlock(_defaultBlockSize);
 
     _pStackTopBlock = _pFirst;
-    _pStackTop = _pFirst->pLastFrame;
+    _pStackTopFrame = _pFirst->pLastFrame;
 }
 
 StackAllocator::~StackAllocator()
@@ -45,7 +45,8 @@ void* StackAllocator::Allocate(size_t size, size_t alignment)
     // Current block is insufficient, allocate another block
     if (available < requiredPaddedSize)
     {
-
+        BlockHeader* pBlockHeader = AddBlock(requiredPaddedSize);
+        FrameHeader* pNextFrame = GetBlockFirstFrame(pBlockHeader);
     }
     else 
     {
@@ -53,18 +54,29 @@ void* StackAllocator::Allocate(size_t size, size_t alignment)
         // Left size is not enough to place a new frame header, allocate another block
         if (leftSize < frameHeaderSize)
         {
+            void* result = GetFrameStartPtr(_pStackTopFrame);
 
-        }
-        // Create a new frame header as stack top
-        else 
-        {
-            void* result = GetFrameStartPtr(_pStackTop);
-            FrameHeader* pNextFrame = reinterpret_cast<FrameHeader*>(reinterpret_cast<size_t>(result) + requiredPaddedSize);
-            pNextFrame->pPrev = _pStackTop;
+            BlockHeader* pBlockHeader = AddBlock(requiredPaddedSize);
+            FrameHeader* pNextFrame = GetBlockFirstFrame(pBlockHeader);
+
+            pNextFrame->pPrev = _pStackTopFrame;
             pNextFrame->used = false;
 
-            _pStackTop->used = true;
-            _pStackTop = pNextFrame;
+            _pStackTopFrame->used = true;
+            _pStackTopFrame = pNextFrame;
+
+            return result;
+        }
+        // Create a new frame header as stack top
+        else
+        {
+            void* result = GetFrameStartPtr(_pStackTopFrame);
+            FrameHeader* pNextFrame = reinterpret_cast<FrameHeader*>(reinterpret_cast<size_t>(result) + requiredPaddedSize);
+            pNextFrame->pPrev = _pStackTopFrame;
+            pNextFrame->used = false;
+
+            _pStackTopFrame->used = true;
+            _pStackTopFrame = pNextFrame;
             return result;
         }
     }
@@ -91,15 +103,16 @@ size_t StackAllocator::GetCurrentBlockNum() const
     return result;
 }
 
-StackAllocator::BlockHeader* StackAllocator::AddBlock(size_t size)
+StackAllocator::BlockHeader* StackAllocator::AddBlock(size_t requiredSize)
 {
+    size_t size = requiredSize > _defaultBlockSize ? requiredSize : _defaultBlockSize;
     size_t spacePaddedSize =  Util::UpAlignment(size, _defaultAlignment);
     size_t totalSize = spacePaddedSize + Util::GetPaddedSize<BlockHeader>(_defaultAlignment);
 
     void* pMemory = ::malloc(totalSize);
 
     BlockHeader* pBlock = reinterpret_cast<BlockHeader*>(pMemory);
-    FrameHeader* pFirstFrame = reinterpret_cast<FrameHeader*>(GetBlockStartPtr(pBlock));
+    FrameHeader* pFirstFrame = GetBlockFirstFrame(pBlock);
     pFirstFrame->pPrev = nullptr;
     pFirstFrame->used = false;
 
@@ -133,10 +146,15 @@ void* StackAllocator::GetFrameStartPtr(const FrameHeader* pFrame) const
     return reinterpret_cast<void*>(addrFrame + Util::GetPaddedSize<FrameHeader>(_defaultAlignment));
 }
 
+StackAllocator::FrameHeader * StackAllocator::GetBlockFirstFrame(const BlockHeader *pBlock) const
+{
+    return reinterpret_cast<FrameHeader*>(GetBlockStartPtr(pBlock));
+}
+
 size_t StackAllocator::GetCurrentBlockLeftSize() const
 {
     size_t blockStartAddr = reinterpret_cast<size_t>(GetBlockStartPtr(_pStackTopBlock));
     size_t blockEndAddr = blockStartAddr + _pStackTopBlock->size;
-    size_t topFrameStartAddr = reinterpret_cast<size_t>(GetFrameStartPtr(_pStackTop));
+    size_t topFrameStartAddr = reinterpret_cast<size_t>(GetFrameStartPtr(_pStackTopFrame));
     return blockEndAddr - topFrameStartAddr;
 }

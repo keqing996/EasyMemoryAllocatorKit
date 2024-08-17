@@ -31,9 +31,10 @@ private:
         size_t size;
     };
 
-    BlockHeader* AddBlock(size_t size);
+    BlockHeader* AddBlock(size_t requiredSize);
     void* GetBlockStartPtr(const BlockHeader* pBlock) const;
     void* GetFrameStartPtr(const FrameHeader* pFrame) const;
+    FrameHeader* GetBlockFirstFrame(const BlockHeader* pBlock) const;
     size_t GetCurrentBlockLeftSize() const;
 
 private:
@@ -41,5 +42,5 @@ private:
     size_t _defaultBlockSize;
     BlockHeader* _pFirst;
     BlockHeader* _pStackTopBlock;
-    FrameHeader* _pStackTop;
+    FrameHeader* _pStackTopFrame;
 };
