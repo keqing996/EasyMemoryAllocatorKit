@@ -90,15 +90,14 @@ float LinearAllocator::CalculateOccupancyRate() const
 void LinearAllocator::AddBlock(size_t requiredSize)
 {
     size_t blockContentSize = requiredSize > _defaultBlockSize ? requiredSize : _defaultBlockSize;
-    size_t spacePaddedSize =  Util::UpAlignment(size, _defaultAlignment);
-    size_t totalSize = spacePaddedSize + Util::GetPaddedSize<BlockHeader>(_defaultAlignment);
+    size_t totalSize = blockContentSize + Util::GetPaddedSize<BlockHeader>(_defaultAlignment);
     
     void* pMemory = ::malloc(totalSize);
 
     BlockHeader* pBlock = static_cast<BlockHeader*>(pMemory);
     pBlock->pCurrent = GetBlockStartPtr(pBlock);
     pBlock->pNext = nullptr;
-    pBlock->size = spacePaddedSize;
+    pBlock->size = blockContentSize;
     
     if (_pFirst == nullptr)
     {
