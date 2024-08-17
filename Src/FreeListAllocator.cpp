@@ -1,4 +1,5 @@
 
+#include <cstddef>
 #include <cstdlib>
 #include "Util.hpp"
 #include "Allocator/FreeListAllocator.h"
@@ -126,7 +127,8 @@ void* FreeListAllocator::AllocateFromBlock(const BlockHeader* pBlock, size_t pad
 
         // If left size is enough to place another NodeHeader, we create a new free node.
         size_t leftSize = available - paddedSize;
-        if (leftSize > Util::GetPaddedSize<NodeHeader>(_defaultAlignment))
+        size_t nodeHeaderPaddingSize = Util::GetPaddedSize<NodeHeader>(_defaultAlignment);
+        if (leftSize > nodeHeaderPaddingSize)
         {
             NodeHeader* pNextFreeNode = reinterpret_cast<NodeHeader*>(
                 reinterpret_cast<size_t>(GetNodeStartPtr(pCurrentNode)) + paddedSize);
@@ -134,7 +136,7 @@ void* FreeListAllocator::AllocateFromBlock(const BlockHeader* pBlock, size_t pad
             pCurrentNode->SetSize(paddedSize);
 
             pNextFreeNode->SetUsed(false);
-            pNextFreeNode->SetSize(leftSize);
+            pNextFreeNode->SetSize(leftSize - nodeHeaderPaddingSize);
             pNextFreeNode->SetPrevNode(pCurrentNode);
         }
 
@@ -176,6 +178,10 @@ void FreeListAllocator::Deallocate(void* p)
         size_t size = pBeginMergeNode->GetSize();
         size += Util::GetPaddedSize<NodeHeader>(_defaultAlignment) + pNextNode->GetSize();
         pBeginMergeNode->SetSize(size);
+
+        auto pNextNextNode = GetNodeNext(pBlock, pNextNode);
+        if (pNextNextNode != nullptr)
+            pNextNextNode->SetPrevNode(pBeginMergeNode);
     }
 
     // If block is empty and this block is not the first block, free the memory of this block.
