@@ -20,23 +20,26 @@ public:
 private:
     struct FrameHeader
     {
-        FrameHeader* pLast;
+        FrameHeader* pPrev;
         bool used;
-        size_t size;
     };
 
     struct BlockHeader
     {
         BlockHeader* pNext;
+        FrameHeader* pLastFrame;
         size_t size;
     };
 
     BlockHeader* AddBlock(size_t size);
     void* GetBlockStartPtr(const BlockHeader* pBlock) const;
+    void* GetFrameStartPtr(const FrameHeader* pFrame) const;
+    size_t GetCurrentBlockLeftSize() const;
 
 private:
     size_t _defaultAlignment;
     size_t _defaultBlockSize;
     BlockHeader* _pFirst;
+    BlockHeader* _pStackTopBlock;
     FrameHeader* _pStackTop;
 };

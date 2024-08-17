@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdio>
+
 #define ToAddr(x) reinterpret_cast<size_t>(x)
 
 template <typename T>
