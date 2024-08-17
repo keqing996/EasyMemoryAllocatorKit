@@ -35,7 +35,7 @@ public:
     const BlockHeader* GetFirstBlockPtr() const;
 
 private:
-    void AddBlock(size_t size);
+    void AddBlock(size_t requiredSize = 0);
 
 private:
     size_t _defaultAlignment;
