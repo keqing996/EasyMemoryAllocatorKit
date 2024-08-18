@@ -31,7 +31,7 @@ private:
         size_t size;
     };
 
-    BlockHeader* AddBlock(size_t requiredSize);
+    BlockHeader* AddBlock(size_t requiredSize = 0);
     void* GetBlockStartPtr(const BlockHeader* pBlock) const;
     void* GetFrameStartPtr(const FrameHeader* pFrame) const;
     FrameHeader* GetBlockFirstFrame(const BlockHeader* pBlock) const;
