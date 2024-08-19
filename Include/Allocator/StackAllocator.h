@@ -35,12 +35,10 @@ private:
     void* GetBlockStartPtr(const BlockHeader* pBlock) const;
     void* GetFrameStartPtr(const FrameHeader* pFrame) const;
     FrameHeader* GetBlockFirstFrame(const BlockHeader* pBlock) const;
-    size_t GetCurrentBlockLeftSize() const;
 
 private:
     size_t _defaultAlignment;
     size_t _defaultBlockSize;
     BlockHeader* _pFirst;
     BlockHeader* _pStackTopBlock;
-    FrameHeader* _pStackTopFrame;
 };

@@ -11,13 +11,8 @@ StackAllocator::StackAllocator(size_t minBlockSize, size_t defaultAlignment)
     , _defaultBlockSize(minBlockSize < MIN_BLOCK_SIZE ? MIN_BLOCK_SIZE: minBlockSize)
     , _pFirst(nullptr)
     , _pStackTopBlock(nullptr)
-    , _pStackTopFrame(nullptr)
 {
     _defaultBlockSize = Util::UpAlignmentPowerOfTwo(_defaultBlockSize);
-    AddBlock(0);
-
-    _pStackTopBlock = _pFirst;
-    _pStackTopFrame = _pFirst->pLastFrame;
 }
 
 StackAllocator::~StackAllocator()
@@ -39,36 +34,62 @@ void* StackAllocator::Allocate(size_t size)
 void* StackAllocator::Allocate(size_t size, size_t alignment)
 {
     size_t requiredPaddedSize = Util::UpAlignment(size, alignment);
-    size_t available = GetCurrentBlockLeftSize();
-    size_t frameHeaderSize = Util::GetPaddedSize<FrameHeader>(_defaultAlignment);
+    size_t frameHeaderSize = Util::GetPaddedSize<FrameHeader>(_defaultAlignment);\
+
+    if (_pFirst == nullptr)
+        AddBlock(requiredPaddedSize);
+
+    FrameHeader* pStackTopFrame = _pStackTopBlock->pLastFrame;
+    size_t available = 0;
+
+    // Nullptr means this is the first block
+    if (pStackTopFrame == nullptr)
+    {
+        available = _pStackTopBlock->size - frameHeaderSize;
+
+        if (    )
+    }
+    else
+    {
+        // Calculate available size
+        size_t blockStartAddr = reinterpret_cast<size_t>(GetBlockStartPtr(_pStackTopBlock));
+        size_t blockEndAddr = blockStartAddr + _pStackTopBlock->size;
+        size_t topFrameStartAddr = reinterpret_cast<size_t>(GetFrameStartPtr(pStackTopFrame));
+        available = blockEndAddr - topFrameStartAddr;
+    }
 
     // Current block is insufficient, allocate another block
     if (available < requiredPaddedSize)
     {
         BlockHeader* pBlockHeader = AddBlock(requiredPaddedSize);
-        FrameHeader* pNextFrame = GetBlockFirstFrame(pBlockHeader);
+
+    }
+
+
+
+
+
+
+
+
+
+
+    if (available < requiredPaddedSize)
+    {
+        BlockHeader* pBlockHeader = AddBlock(requiredPaddedSize);
+        FrameHeader* pBlockFirstFrame = GetBlockFirstFrame(pBlockHeader);
+        pBlockFirstFrame->pPrev = _pStackTopFrame;
+        pBlockFirstFrame->used = true;
+        _pStackTopFrame = pBlockFirstFrame;
+        _pStackTopBlock = pBlockHeader;
+
+        return GetFrameStartPtr(_pStackTopFrame);
     }
     else 
     {
         size_t leftSize = available - requiredPaddedSize;
         // Left size is not enough to place a new frame header, allocate another block
-        if (leftSize < frameHeaderSize)
-        {
-            void* result = GetFrameStartPtr(_pStackTopFrame);
-
-            BlockHeader* pBlockHeader = AddBlock(requiredPaddedSize);
-            FrameHeader* pNextFrame = GetBlockFirstFrame(pBlockHeader);
-
-            pNextFrame->pPrev = _pStackTopFrame;
-            pNextFrame->used = false;
-
-            _pStackTopFrame->used = true;
-            _pStackTopFrame = pNextFrame;
-
-            return result;
-        }
-        // Create a new frame header as stack top
-        else
+        if (leftSize > frameHeaderSize)
         {
             void* result = GetFrameStartPtr(_pStackTopFrame);
             FrameHeader* pNextFrame = reinterpret_cast<FrameHeader*>(reinterpret_cast<size_t>(result) + requiredPaddedSize);
@@ -78,6 +99,11 @@ void* StackAllocator::Allocate(size_t size, size_t alignment)
             _pStackTopFrame->used = true;
             _pStackTopFrame = pNextFrame;
             return result;
+        }
+        // C
+        else
+        {
+
         }
     }
 
@@ -109,7 +135,8 @@ StackAllocator::BlockHeader* StackAllocator::AddBlock(size_t requiredSize)
     size_t minimumRequiredSize = requiredSize + Util::GetPaddedSize<FrameHeader>(_defaultAlignment);
 
     // The content size of block is at least Default Block Size.
-    size_t blockContentSize = Util::UpAlignment(minimumRequiredSize > _defaultBlockSize ? minimumRequiredSize : _defaultBlockSize, _defaultAlignment);
+    size_t blockContentSize = Util::UpAlignment(minimumRequiredSize > _defaultBlockSize
+        ? minimumRequiredSize : _defaultBlockSize, _defaultAlignment);
 
     // Total allocate size = block header + block content
     size_t totalSize = blockContentSize + Util::GetPaddedSize<BlockHeader>(_defaultAlignment);
@@ -119,12 +146,7 @@ StackAllocator::BlockHeader* StackAllocator::AddBlock(size_t requiredSize)
     BlockHeader* pBlock = reinterpret_cast<BlockHeader*>(pMemory);
     pBlock->pNext = nullptr;
     pBlock->size = blockContentSize;
-
-    FrameHeader* pFirstFrame = GetBlockFirstFrame(pBlock);
-    pFirstFrame->pPrev = nullptr;
-    pFirstFrame->used = false;
-
-    pBlock->pLastFrame = pFirstFrame;
+    pBlock->pLastFrame = nullptr;
 
     if (_pFirst == nullptr)
          _pFirst = pBlock;
@@ -155,12 +177,4 @@ void* StackAllocator::GetFrameStartPtr(const FrameHeader* pFrame) const
 StackAllocator::FrameHeader * StackAllocator::GetBlockFirstFrame(const BlockHeader *pBlock) const
 {
     return reinterpret_cast<FrameHeader*>(GetBlockStartPtr(pBlock));
-}
-
-size_t StackAllocator::GetCurrentBlockLeftSize() const
-{
-    size_t blockStartAddr = reinterpret_cast<size_t>(GetBlockStartPtr(_pStackTopBlock));
-    size_t blockEndAddr = blockStartAddr + _pStackTopBlock->size;
-    size_t topFrameStartAddr = reinterpret_cast<size_t>(GetFrameStartPtr(_pStackTopFrame));
-    return blockEndAddr - topFrameStartAddr;
 }

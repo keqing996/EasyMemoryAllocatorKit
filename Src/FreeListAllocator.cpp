@@ -1,7 +1,6 @@
 
 #include <cstddef>
 #include <cstdlib>
-#include <utility>
 #include "Util.hpp"
 #include "Allocator/FreeListAllocator.h"
 
@@ -13,7 +12,6 @@ FreeListAllocator::FreeListAllocator(size_t minBlockSize, size_t defaultAlignmen
     , _pFirst(nullptr)
 {
     _defaultBlockSize = Util::UpAlignmentPowerOfTwo(_defaultBlockSize);
-    AddBlock();
 }
 
 FreeListAllocator::~FreeListAllocator()
@@ -82,6 +80,9 @@ void* FreeListAllocator::Allocate(size_t size)
 void* FreeListAllocator::Allocate(size_t size, size_t alignment)
 {
     size_t alignedSize = Util::UpAlignment(size, alignment);
+
+    if (_pFirst == nullptr)
+        AddBlock(alignedSize);
 
     BlockHeader* pCurrentBlock = _pFirst;
     while (true)
@@ -220,7 +221,8 @@ FreeListAllocator::BlockHeader* FreeListAllocator::AddBlock(size_t requiredSize)
     size_t minimumRequiredSize = requiredSize + Util::GetPaddedSize<NodeHeader>(_defaultAlignment);
 
     // The content size of block is at least Default Block Size.
-    size_t blockContentSize = Util::UpAlignment(std::max(minimumRequiredSize, _defaultBlockSize), _defaultAlignment);
+    size_t blockContentSize = Util::UpAlignment(minimumRequiredSize > _defaultBlockSize
+        ? minimumRequiredSize : _defaultBlockSize, _defaultAlignment);
 
     // Total allocate size = block header + block content
     size_t totalSize = blockContentSize + Util::GetPaddedSize<BlockHeader>(_defaultAlignment);
