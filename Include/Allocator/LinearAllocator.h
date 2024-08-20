@@ -1,47 +1,27 @@
 #pragma once
+#include <cstdint>
 
 class LinearAllocator
 {
 public:
-    LinearAllocator(size_t minBlockSize, size_t defaultAlignment);
+    explicit LinearAllocator(size_t size);
     ~LinearAllocator();
 
     LinearAllocator(const LinearAllocator& rhs) = delete;
     LinearAllocator(LinearAllocator&& rhs) = delete;
 
 public:
-    struct BlockHeader
-    {
-        BlockHeader* pNext;
-        void* pCurrent;
-        size_t size;
-    };
-
-public:
-    // Allocate & Deallocate
-    void* Allocate(size_t size);
-    void* Allocate(size_t size, size_t alignment);
+    void* Allocate(size_t size, size_t alignment = 4);
     void Deallocate(void* p);
-
-    // Getter
-    size_t GetCurrentAlignment() const;
-    size_t GetDefaultBlockSize() const;
-
-    // Block information
-    size_t GetCurrentBlockNum() const;
-    float CalculateOccupancyRate() const;
-    void* GetBlockStartPtr(const BlockHeader* pBlock) const;
-    size_t GetBlockUsedSize(const BlockHeader* pBlock) const;
-    const BlockHeader* GetFirstBlockPtr() const;
+    void Reset();
 
 private:
-    void AddBlock(size_t requiredSize = 0);
+    size_t GetAvailableSpace() const;
 
 private:
-    size_t _defaultAlignment;
-    size_t _defaultBlockSize;
-    BlockHeader* _pFirst;
-    BlockHeader* _pTail;
+    uint8_t* _pData;
+    uint8_t* _pCurrent;
+    size_t _size;
 };
 
 
