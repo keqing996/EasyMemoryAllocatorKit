@@ -1,7 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest.h"
 
-#include "Allocator/FreeListAllocator.h"
+#include "Allocator/FreeListAllocator.hpp"
 #include "Allocator/StackAllocator.hpp"
 #include "../Src/Util.hpp"
 #include "Helper.h"

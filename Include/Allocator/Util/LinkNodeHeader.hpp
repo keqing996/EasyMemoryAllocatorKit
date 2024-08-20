@@ -4,6 +4,7 @@
 
 namespace MemoryPool
 {
+    template <size_t DefaultAlignment>
     class LinkNodeHeader
     {
     public:
@@ -40,10 +41,15 @@ namespace MemoryPool
             _pPrev = prev;
         }
 
-    public:
-        static size_t PaddedSize(size_t alignment)
+        LinkNodeHeader* MoveNext() const
         {
-            return Util::GetPaddedSize<LinkNodeHeader>(alignment);
+            return reinterpret_cast<LinkNodeHeader*>(Util::PtrOffsetBytes(this, GetSize() + PaddedSize()));
+        }
+
+    public:
+        static size_t PaddedSize()
+        {
+            return Util::GetPaddedSize<LinkNodeHeader>(DefaultAlignment);
         }
 
     private:

@@ -14,6 +14,12 @@ namespace MemoryPool
 
     public:
 
+        template <typename T>
+        inline static size_t ToAddr(const T* p)
+        {
+            return reinterpret_cast<size_t>(p);
+        }
+
         inline static size_t UpAlignment(size_t size, size_t alignment)
         {
             return (size + alignment - 1) & ~(alignment - 1);
