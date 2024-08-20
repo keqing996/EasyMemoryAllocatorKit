@@ -2,6 +2,7 @@
 #include "doctest.h"
 
 #include "Allocator/FreeListAllocator.h"
+#include "Allocator/StackAllocator.hpp"
 #include "../Src/Util.hpp"
 #include "Helper.h"
 
