@@ -43,7 +43,7 @@ namespace MemoryPool
         }
 
         template <typename T>
-        inline T* PtrOffsetBytes(T* ptr, size_t offset)
+        inline static T* PtrOffsetBytes(T* ptr, size_t offset)
         {
             return reinterpret_cast<T*>(reinterpret_cast<size_t>(ptr) + offset);
         }
