@@ -8,6 +8,7 @@ namespace MemoryPool
     template <size_t DefaultAlignment = 4>
     class FreeListAllocator
     {
+        using NodeHeader = LinkNodeHeader<DefaultAlignment>;
     public:
         explicit FreeListAllocator(size_t size);
         ~FreeListAllocator();
@@ -20,9 +21,12 @@ namespace MemoryPool
         void Deallocate(void* p);
 
     private:
+        bool IsValidHeader(NodeHeader* pHeader);
+
+    private:
         uint8_t* _pData;
         size_t _size;
-        LinkNodeHeader* _pFirstNode;
+        LinkNodeHeader<DefaultAlignment>* _pFirstNode;
     };
 
     template<size_t DefaultAlignment>
@@ -31,14 +35,14 @@ namespace MemoryPool
         , _size(size)
         , _pFirstNode(nullptr)
     {
-        if (_size < LinkNodeHeader::PaddedSize(DefaultAlignment))
-            _size = LinkNodeHeader::PaddedSize(DefaultAlignment);
+        if (_size < NodeHeader::PaddedSize())
+            _size = NodeHeader::PaddedSize();
 
         _pData = static_cast<uint8_t*>(::malloc(_size));
 
-        _pFirstNode = reinterpret_cast<LinkNodeHeader*>(_pData);
+        _pFirstNode = reinterpret_cast<NodeHeader*>(_pData);
         _pFirstNode->SetUsed(false);
-        _pFirstNode->SetSize(_size - LinkNodeHeader::PaddedSize(DefaultAlignment));
+        _pFirstNode->SetSize(_size - NodeHeader::PaddedSize());
         _pFirstNode->SetPrevNode(nullptr);
     }
 
@@ -51,10 +55,10 @@ namespace MemoryPool
     template<size_t DefaultAlignment>
     void* FreeListAllocator<DefaultAlignment>::Allocate(size_t size, size_t alignment)
     {
-        size_t headerSize = LinkNodeHeader::PaddedSize(DefaultAlignment);
+        size_t headerSize = NodeHeader::PaddedSize(DefaultAlignment);
         size_t requiredSize = Util::UpAlignment(size, alignment);
 
-        LinkNodeHeader* pCurrentNode = _pFirstNode;
+        NodeHeader* pCurrentNode = _pFirstNode;
         while (true)
         {
             if (pCurrentNode == nullptr)
@@ -66,12 +70,24 @@ namespace MemoryPool
             }
 
             // Move next
-
+            pCurrentNode = pCurrentNode->MoveNext();
+            if (!IsValidHeader(pCurrentNode))
+                pCurrentNode = nullptr;
         }
     }
 
     template<size_t DefaultAlignment>
     void FreeListAllocator<DefaultAlignment>::Deallocate(void* p)
     {
+    }
+
+    template<size_t DefaultAlignment>
+    bool FreeListAllocator<DefaultAlignment>::IsValidHeader(NodeHeader* pHeader)
+    {
+        size_t dataBeginAddr = Util::ToAddr(_pData);
+        size_t dataEndAddr = dataBeginAddr + _size;
+        size_t headerStartAddr = Util::ToAddr(pHeader);
+        size_t headerEndAddr = headerStartAddr + NodeHeader::PaddedSize();
+        return headerStartAddr >= dataBeginAddr && headerEndAddr <= dataEndAddr;
     }
 }
