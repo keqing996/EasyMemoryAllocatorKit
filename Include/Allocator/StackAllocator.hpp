@@ -8,7 +8,7 @@ namespace MemoryPool
     template <size_t DefaultAlignment = 4>
     class StackAllocator
     {
-        using FrameHeader = LinkNodeHeader<DefaultAlignment>;
+        using FrameHeader = LinkNodeHeader;
     public:
         explicit StackAllocator(size_t size);
         ~StackAllocator();
@@ -32,14 +32,14 @@ namespace MemoryPool
         , _size(size)
         , _pStackTop(nullptr)
     {
-        if (_size < FrameHeader::PaddedSize())
-            _size = FrameHeader::PaddedSize();
+        if (_size < FrameHeader::PaddedSize<DefaultAlignment>())
+            _size = FrameHeader::PaddedSize<DefaultAlignment>();
 
         _pData = static_cast<uint8_t*>(::malloc(_size));
 
         _pStackTop = reinterpret_cast<LinkNodeHeader*>(_pData);
         _pStackTop->SetUsed(false);
-        _pStackTop->SetSize(_size - FrameHeader::PaddedSize());
+        _pStackTop->SetSize(_size - FrameHeader::PaddedSize<DefaultAlignment>());
         _pStackTop->SetPrevNode(nullptr);
     }
 
@@ -52,7 +52,7 @@ namespace MemoryPool
     template<size_t DefaultAlignment>
     void* StackAllocator<DefaultAlignment>::Allocate(size_t size, size_t alignment)
     {
-        size_t headerSize = FrameHeader::PaddedSize();
+        size_t headerSize = FrameHeader::PaddedSize<DefaultAlignment>();
         size_t requiredSize = Util::UpAlignment(size, alignment);
 
         if (_pStackTop->Used() || requiredSize < _pStackTop->GetSize())
@@ -64,7 +64,7 @@ namespace MemoryPool
 
         // Try to create a new header
         size_t leftSpace = _pStackTop->GetSize() - requiredSize;
-        if (leftSpace >= FrameHeader::PaddedSize())
+        if (leftSpace >= FrameHeader::PaddedSize<DefaultAlignment>())
         {
             _pStackTop->SetSize(requiredSize);
 
@@ -82,7 +82,7 @@ namespace MemoryPool
     template<size_t DefaultAlignment>
     void StackAllocator<DefaultAlignment>::Deallocate(void* p)
     {
-        size_t headerSize = FrameHeader::PaddedSize();
+        size_t headerSize = FrameHeader::PaddedSize<DefaultAlignment>();
         FrameHeader* pHeader = reinterpret_cast<LinkNodeHeader*>(Util::PtrOffsetBytes(p, -headerSize));
         pHeader->SetUsed(false);
 
