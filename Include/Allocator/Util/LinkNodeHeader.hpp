@@ -48,9 +48,9 @@ namespace MemoryPool
 
     public:
         template <size_t DefaultAlignment>
-        static size_t PaddedSize()
+        constexpr static size_t PaddedSize()
         {
-            return Util::GetPaddedSize<LinkNodeHeader>(DefaultAlignment);
+            return Util::GetPaddedSize<LinkNodeHeader, DefaultAlignment>();
         }
 
     private:
