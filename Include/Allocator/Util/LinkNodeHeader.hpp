@@ -40,6 +40,12 @@ namespace MemoryPool
             _pPrev = prev;
         }
 
+        void ClearData()
+        {
+            _pPrev = nullptr;
+            _usedAndSize = 0;
+        }
+
         template <size_t DefaultAlignment>
         LinkNodeHeader* MoveNext() const
         {
