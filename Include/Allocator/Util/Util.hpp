@@ -15,23 +15,35 @@ namespace MemoryPool
     public:
 
         template <typename T>
-        inline static size_t ToAddr(const T* p)
+        static size_t ToAddr(const T* p)
         {
             return reinterpret_cast<size_t>(p);
         }
 
-        inline static size_t UpAlignment(size_t size, size_t alignment)
+        static size_t UpAlignment(size_t size, size_t alignment)
+        {
+            return (size + alignment - 1) & ~(alignment - 1);
+        }
+
+        template <size_t size, size_t alignment>
+        constexpr static size_t UpAlignment()
         {
             return (size + alignment - 1) & ~(alignment - 1);
         }
 
         template <typename T>
-        inline static size_t GetPaddedSize(size_t alignment)
+        static size_t GetPaddedSize(size_t alignment)
         {
-            return Util::UpAlignment(sizeof(T), alignment);
+            return UpAlignment(sizeof(T), alignment);
         }
 
-        inline static size_t UpAlignmentPowerOfTwo(size_t value)
+        template <typename T, size_t alignment>
+        constexpr static size_t GetPaddedSize()
+        {
+            return UpAlignment<sizeof(T), alignment>();
+        }
+
+        static size_t UpAlignmentPowerOfTwo(size_t value)
         {
             if (value <= 4)
                 return 4;
@@ -49,7 +61,7 @@ namespace MemoryPool
         }
 
         template <typename T>
-        inline static T* PtrOffsetBytes(T* ptr, size_t offset)
+        static T* PtrOffsetBytes(T* ptr, size_t offset)
         {
             return reinterpret_cast<T*>(reinterpret_cast<size_t>(ptr) + offset);
         }
