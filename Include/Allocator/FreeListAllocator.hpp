@@ -69,10 +69,21 @@ namespace MemoryPool
 
                 void* pResult = reinterpret_cast<void*>(Util::PtrOffsetBytes(pCurrentNode, headerSize));
 
-                if (pCurrentNode->GetSize() - requiredSize > headerSize)
+                // Create a new node if left size is enough to place a new header.
+                size_t leftSize = pCurrentNode->GetSize() - requiredSize;
+                if (leftSize > headerSize)
                 {
+                    pCurrentNode->SetSize(requiredSize);
 
+                    LinkNodeHeader* pNextNode = reinterpret_cast<LinkNodeHeader*>(
+                        Util::PtrOffsetBytes(pCurrentNode, headerSize + requiredSize));
+
+                    pNextNode->SetPrevNode(pCurrentNode);
+                    pNextNode->SetUsed(false);
+                    pNextNode->SetSize(leftSize - headerSize);
                 }
+
+                return pResult;
             }
 
             // Move next
