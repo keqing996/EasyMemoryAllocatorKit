@@ -96,6 +96,39 @@ namespace MemoryPool
     template<size_t DefaultAlignment>
     void FreeListAllocator<DefaultAlignment>::Deallocate(void* p)
     {
+        size_t headerSize = LinkNodeHeader::PaddedSize<DefaultAlignment>(DefaultAlignment);
+
+        LinkNodeHeader* pCurrentNode = static_cast<LinkNodeHeader*>(Util::PtrOffsetBytes(p, -headerSize));
+        pCurrentNode->SetUsed(false);
+
+        // Merge forward
+        while (true)
+        {
+            LinkNodeHeader* pNextNode = pCurrentNode->MoveNext<DefaultAlignment>();
+            if (!IsValidHeader(pNextNode) || pNextNode->Used())
+                break;
+
+            size_t oldSize = pCurrentNode->GetSize();
+            size_t newSize = oldSize + headerSize + pNextNode->GetSize();
+            pNextNode->ClearData();
+            pCurrentNode->SetSize(newSize);
+        }
+
+        // Merge backward
+        while (true)
+        {
+            LinkNodeHeader* pPrevNode = pCurrentNode->GetPrevNode();
+            if (!IsValidHeader(pPrevNode) || pPrevNode->Used())
+                break;
+
+            size_t oldSize = pPrevNode->GetSize();
+            size_t newSize = oldSize + headerSize + pCurrentNode->GetSize();
+            pCurrentNode->ClearData();
+            pPrevNode->SetSize(newSize);
+
+            // Move backward
+            pCurrentNode = pPrevNode;
+        }
     }
 
     template<size_t DefaultAlignment>
