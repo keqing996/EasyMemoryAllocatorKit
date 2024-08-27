@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include "Util/Util.hpp"
 #include "Util/LinkNodeHeader.hpp"
 
