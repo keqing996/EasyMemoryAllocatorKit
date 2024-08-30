@@ -51,17 +51,23 @@ void CUSTOM_DELETE(AllocatorScope<DefaultAlignment>& allocator, T* p)
     allocator.gAllocator->Deallocate(p);
 }
 
-/*
-template <size_t Alignment>
-void TestBasicAllocation(size_t alignment)
-{
-    AllocatorScope<Alignment> allocator(128);
 
-    uint32_t* pUint = CUSTOM_NEW<uint32_t, Alignment>(allocator);
-    *pUint = 0xABCDABCD;
+template <size_t Alignment>
+void TestBasicAllocation()
+{
+    constexpr size_t alignment = 4;
+    AllocatorScope<alignment> allocator(128);
+
+    void* pMemBlock = allocator.gAllocator->GetMemoryBlockPtr();
+    PrintPtrAddr("Mem block addr:", pMemBlock);
+    CHECK(pMemBlock != nullptr);
+
+    uint32_t* pUint = CUSTOM_NEW<uint32_t>(allocator);
+    void* pCurrent =
+
 
     auto pFirstBlock = gAllocator->GetFirstBlockPtr();
-    PrintPtrAddr("First block addr:", pFirstBlock);
+
 
     auto pStartAddr = gAllocator->GetBlockStartPtr(pFirstBlock);
     PrintPtrAddr("Block start addr:", pStartAddr);
@@ -94,7 +100,6 @@ void TestBasicAllocation(size_t alignment)
     CHECK(ToAddr(pLastCurrentAddr) == ToAddr(pTemp));
     CHECK(ToAddr(pCurrentAddr) == ToAddr(pLastCurrentAddr) + Util::UpAlignment(sizeof(Temp), alignment));
 }
-*/
 
 TEST_CASE("TestApi")
 {

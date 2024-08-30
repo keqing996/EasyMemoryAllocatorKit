@@ -1,12 +1,13 @@
 #pragma once
 
 #include <cstdint>
+#include "Allocator.hpp"
 #include "Util/Util.hpp"
 
 namespace MemoryPool
 {
     template <size_t DefaultAlignment = 4>
-    class LinearAllocator
+    class LinearAllocator: public Allocator
     {
     public:
         explicit LinearAllocator(size_t size);
@@ -16,9 +17,12 @@ namespace MemoryPool
         LinearAllocator(LinearAllocator&& rhs) = delete;
 
     public:
-        void* Allocate(size_t size, size_t alignment = DefaultAlignment);
-        void Deallocate(void* p);
+        void* Allocate(size_t size) override;
+        void* Allocate(size_t size, size_t alignment) override;
+        void Deallocate(void* p) override;
         void Reset();
+        void* GetMemoryBlockPtr() const;
+        void* GetCurrentPtr() const;
 
     private:
         size_t GetAvailableSpace() const;
@@ -41,6 +45,12 @@ namespace MemoryPool
     LinearAllocator<DefaultAlignment>::~LinearAllocator()
     {
         ::free(_pData);
+    }
+
+    template<size_t DefaultAlignment>
+    void* LinearAllocator<DefaultAlignment>::Allocate(size_t size)
+    {
+        return Allocate(size, DefaultAlignment);
     }
 
     template<size_t DefaultAlignment>
@@ -67,6 +77,18 @@ namespace MemoryPool
     void LinearAllocator<DefaultAlignment>::Reset()
     {
         _pCurrent = _pData;
+    }
+
+    template<size_t DefaultAlignment>
+    void* LinearAllocator<DefaultAlignment>::GetMemoryBlockPtr() const
+    {
+        return _pData;
+    }
+
+    template<size_t DefaultAlignment>
+    void* LinearAllocator<DefaultAlignment>::GetCurrentPtr() const
+    {
+        return _pCurrent;
     }
 
     template<size_t DefaultAlignment>
