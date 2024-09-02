@@ -4,7 +4,7 @@
 
 namespace MemoryPool
 {
-    class LinkNodeHeader
+    class LinkNode
     {
     public:
         size_t GetSize() const
@@ -30,12 +30,12 @@ namespace MemoryPool
                 _usedAndSize &= ~Util::HIGHEST_BIT_MASK;
         }
 
-        LinkNodeHeader* GetPrevNode() const
+        LinkNode* GetPrevNode() const
         {
             return _pPrev;
         }
 
-        void SetPrevNode(LinkNodeHeader* prev)
+        void SetPrevNode(LinkNode* prev)
         {
             _pPrev = prev;
         }
@@ -47,20 +47,26 @@ namespace MemoryPool
         }
 
         template <size_t DefaultAlignment>
-        LinkNodeHeader* MoveNext() const
+        LinkNode* MoveNext() const
         {
-            return reinterpret_cast<LinkNodeHeader*>(Util::PtrOffsetBytes(this, GetSize() + PaddedSize<DefaultAlignment>()));
+            return reinterpret_cast<LinkNode*>(Util::PtrOffsetBytes(this, GetSize() + PaddedSize<DefaultAlignment>()));
         }
 
     public:
         template <size_t DefaultAlignment>
-        constexpr static size_t PaddedSize()
+        static constexpr size_t PaddedSize()
         {
-            return Util::GetPaddedSize<LinkNodeHeader, DefaultAlignment>();
+            return Util::GetPaddedSize<LinkNode, DefaultAlignment>();
+        }
+
+        template <size_t DefaultAlignment>
+        static LinkNode* BackStepToLinkNode(void* ptr)
+        {
+            return static_cast<LinkNode*>(Util::PtrOffsetBytes(ptr, -PaddedSize<DefaultAlignment>()));
         }
 
     private:
-        LinkNodeHeader* _pPrev;
+        LinkNode* _pPrev;
         size_t _usedAndSize;
     };
 }

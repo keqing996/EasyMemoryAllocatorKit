@@ -33,7 +33,7 @@ namespace MemoryPool
 
     template<size_t DefaultAlignment>
     LinearAllocator<DefaultAlignment>::LinearAllocator(size_t size)
-        : _pData(static_cast<uint8_t*>(::malloc(size)))
+        : _pData(::malloc(size))
         , _pCurrent(_pData)
         , _size(size)
     {
