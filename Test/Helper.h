@@ -1,9 +1,11 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdio>
+#include <format>
 #include "Allocator/Allocator.hpp"
 
-#define ToAddr(x) reinterpret_cast<size_t>(x)
+#define ToAddr(x) reinterpret_cast<unsigned long long>(x)
 
 struct AllocatorMarker {};
 inline void* operator new(size_t, AllocatorMarker, void* ptr) { return ptr; }
@@ -34,7 +36,11 @@ struct AllocatorScope
 template<typename T>
 T* CUSTOM_NEW()
 {
-    return new (AllocatorMarker(), gAllocator->Allocate(sizeof(T))) T();
+    void* pMem = gAllocator->Allocate(sizeof(T));
+    if (pMem == nullptr)
+        return nullptr;
+
+    return new (AllocatorMarker(), pMem) T();
 }
 
 template<typename T, typename... Args>
@@ -77,10 +83,3 @@ struct Data128B
 {
     uint8_t data[128];
 };
-
-template <typename T>
-void PrintPtrAddr(const char* str, T* ptr)
-{
-    ::printf("%s", str);
-    ::printf(" %llx\n", ToAddr(ptr));
-}

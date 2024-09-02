@@ -23,13 +23,11 @@ namespace MemoryPool
         void Reset();
         void* GetMemoryBlockPtr() const;
         void* GetCurrentPtr() const;
+        size_t GetAvailableSpaceSize() const;
 
     private:
-        size_t GetAvailableSpace() const;
-
-    private:
-        uint8_t* _pData;
-        uint8_t* _pCurrent;
+        void* _pData;
+        void* _pCurrent;
         size_t _size;
     };
 
@@ -57,13 +55,13 @@ namespace MemoryPool
     void* LinearAllocator<DefaultAlignment>::Allocate(size_t size, size_t alignment)
     {
         size_t requiredSize = Util::UpAlignment(size, alignment);
-        size_t available = GetAvailableSpace();
+        size_t available = GetAvailableSpaceSize();
 
         if (available < requiredSize)
             return nullptr;
 
         void* result = _pCurrent;
-        _pCurrent += requiredSize;
+        _pCurrent = Util::PtrOffsetBytes(_pCurrent, requiredSize);
         return result;
     }
 
@@ -92,7 +90,7 @@ namespace MemoryPool
     }
 
     template<size_t DefaultAlignment>
-    size_t LinearAllocator<DefaultAlignment>::GetAvailableSpace() const
+    size_t LinearAllocator<DefaultAlignment>::GetAvailableSpaceSize() const
     {
         return reinterpret_cast<size_t>(_pData) + _size - reinterpret_cast<size_t>(_pCurrent);
     }
