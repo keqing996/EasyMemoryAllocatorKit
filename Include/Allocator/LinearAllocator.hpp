@@ -11,7 +11,7 @@ namespace MemoryPool
     {
     public:
         explicit LinearAllocator(size_t size);
-        ~LinearAllocator();
+        ~LinearAllocator() override;
 
         LinearAllocator(const LinearAllocator& rhs) = delete;
         LinearAllocator(LinearAllocator&& rhs) = delete;

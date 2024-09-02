@@ -6,127 +6,56 @@
 
 using namespace MemoryPool;
 
-struct AllocatorMarker {};
-inline void* operator new(size_t, AllocatorMarker, void* ptr) { return ptr; }
-inline void operator delete(void*, AllocatorMarker, void*) { }
-
-template <size_t DefaultAlignment = 4>
-struct AllocatorScope
+template<typename T, size_t alignment, size_t blockSize>
+void AllocateAndDelete(size_t* alreadyAllocateSize, LinearAllocator<alignment>* pAllocator)
 {
-    LinearAllocator<DefaultAlignment>* gAllocator = nullptr;
+    T* pUint1 = CUSTOM_NEW<T>();
+    size_t allocationSize = Util::UpAlignment<sizeof(uint32_t), alignment>();
 
-    explicit AllocatorScope(size_t blockSize)
+    if (*alreadyAllocateSize + allocationSize > blockSize)
     {
-        void* pAllocator = ::malloc(sizeof(LinearAllocator<DefaultAlignment>));
-        gAllocator = new(pAllocator) LinearAllocator<DefaultAlignment>(blockSize);
+        CHECK(pUint1 == nullptr);
     }
-
-    ~AllocatorScope()
+    else
     {
-        gAllocator->~LinearAllocator();
-        ::free(gAllocator);
+        void* pMemBlock = pAllocator->GetMemoryBlockPtr();
+        void* pCurrent = pAllocator->GetCurrentPtr();
+        CHECK(ToAddr(pCurrent) == ToAddr(pMemBlock) + allocationSize);
+        CUSTOM_DELETE(pUint1);
+        CHECK(ToAddr(pCurrent) == ToAddr(pMemBlock) + Util::UpAlignment<sizeof(uint32_t), alignment>());
 
-        gAllocator = nullptr;
+        *alreadyAllocateSize += allocationSize;
     }
-};
-
-template<typename T, size_t DefaultAlignment>
-T* CUSTOM_NEW(AllocatorScope<DefaultAlignment>& allocator)
-{
-    return new (AllocatorMarker(), allocator.gAllocator->Allocate(sizeof(T))) T();
 }
 
-template<typename T, size_t DefaultAlignment, typename... Args>
-T* CUSTOM_NEW(AllocatorScope<DefaultAlignment>& allocator, Args&&... args)
+template <size_t alignment, size_t blockSize>
+void TestAllocation()
 {
-    return new (AllocatorMarker(), allocator.gAllocator->Allocate(sizeof(T))) T(std::forward<Args>(args)...);
-}
+    AllocatorScope<LinearAllocator<alignment>> allocator(blockSize);
 
-template<typename T, size_t DefaultAlignment>
-void CUSTOM_DELETE(AllocatorScope<DefaultAlignment>& allocator, T* p)
-{
-    if (!p)
-        return;
-    p->~T();
-    allocator.gAllocator->Deallocate(p);
-}
+    auto* pAllocator = AllocatorScope<LinearAllocator<alignment>>::CastAllocator();
 
+    void* pMemBlock = pAllocator->GetMemoryBlockPtr();
+    void* pCurrent = pAllocator->GetCurrentPtr();
+    size_t alreadyAllocateSize = 0;
 
-template <size_t Alignment>
-void TestBasicAllocation()
-{
-    constexpr size_t alignment = 4;
-    AllocatorScope<alignment> allocator(128);
-
-    void* pMemBlock = allocator.gAllocator->GetMemoryBlockPtr();
     PrintPtrAddr("Mem block addr:", pMemBlock);
     CHECK(pMemBlock != nullptr);
+    CHECK(pMemBlock == pCurrent);
 
-    uint32_t* pUint = CUSTOM_NEW<uint32_t>(allocator);
-    void* pCurrent =
-
-
-    auto pFirstBlock = gAllocator->GetFirstBlockPtr();
-
-
-    auto pStartAddr = gAllocator->GetBlockStartPtr(pFirstBlock);
-    PrintPtrAddr("Block start addr:", pStartAddr);
-
-    auto pCurrentAddr = pFirstBlock->pCurrent;
-    PrintPtrAddr("After uint32 Current addr", pCurrentAddr);
-
-    CHECK(ToAddr(pCurrentAddr) == ToAddr(pStartAddr) + Util::UpAlignment(sizeof(uint32_t), alignment));
-    CHECK(ToAddr(pStartAddr) == ToAddr(pUint));
-
-    struct Temp
-    {
-        int a;
-        float b;
-        char c;
-
-        Temp(int aa, float bb, char cc): a(aa), b(bb), c(cc)
-        {
-        }
-    };
-
-    printf("Size of struct: %llu\n", sizeof(Temp));
-
-    void* pLastCurrentAddr = pCurrentAddr;
-    Temp* pTemp = CUSTOM_NEW<Temp>(1, 2.0f, 'x');
-
-    pCurrentAddr = pFirstBlock->pCurrent;
-    PrintPtrAddr("After temp Current addr", pCurrentAddr);
-
-    CHECK(ToAddr(pLastCurrentAddr) == ToAddr(pTemp));
-    CHECK(ToAddr(pCurrentAddr) == ToAddr(pLastCurrentAddr) + Util::UpAlignment(sizeof(Temp), alignment));
+    AllocateAndDelete<uint32_t, alignment, blockSize>(&alreadyAllocateSize, pAllocator);
+    AllocateAndDelete<uint32_t, alignment, blockSize>(&alreadyAllocateSize, pAllocator);
+    AllocateAndDelete<uint64_t, alignment, blockSize>(&alreadyAllocateSize, pAllocator);
+    AllocateAndDelete<Data64B, alignment, blockSize>(&alreadyAllocateSize, pAllocator);
+    AllocateAndDelete<Data64B, alignment, blockSize>(&alreadyAllocateSize, pAllocator);
 }
 
 TEST_CASE("TestApi")
 {
-    printf("======= Test Basic Creation =======\n");
-
-    constexpr size_t alignment = 4;
-    AllocatorScope<alignment> allocator(128);
-
-    uint32_t* pUint = CUSTOM_NEW<uint32_t>(allocator);
-    CHECK(pUint != nullptr);
+    TestAllocation<4, 128>();
+    TestAllocation<4, 256>();
+    TestAllocation<4, 512>();
+    TestAllocation<8, 128>();
+    TestAllocation<8, 256>();
+    TestAllocation<8, 512>();
 }
-
-/*
-
-TEST_CASE("TestAllocate")
-{
-    printf("======= Test Basic Allocation (align = 4) =======\n");
-
-    TestBasicAllocation(4, 4);
-
-    printf("======= Test Basic Allocation (align = 8) =======\n");
-
-    TestBasicAllocation(8, 8);
-
-    printf("======= Test Basic Allocation (align = 9 -> 16) =======\n");
-
-    TestBasicAllocation(9, 16);
-}
-
-*/
