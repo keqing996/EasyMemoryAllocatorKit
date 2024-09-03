@@ -65,7 +65,7 @@ namespace MemoryPool
     template<size_t DefaultAlignment>
     void* FreeListAllocator<DefaultAlignment>::Allocate(size_t size, size_t alignment)
     {
-        size_t headerSize = LinkNode::PaddedSize<DefaultAlignment>(DefaultAlignment);
+        size_t headerSize = LinkNode::PaddedSize<DefaultAlignment>();
         size_t requiredSize = Util::UpAlignment(size, alignment);
 
         LinkNode* pCurrentNode = _pFirstNode;
