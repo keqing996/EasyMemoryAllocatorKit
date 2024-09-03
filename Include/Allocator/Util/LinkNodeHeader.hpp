@@ -47,9 +47,9 @@ namespace MemoryPool
         }
 
         template <size_t DefaultAlignment>
-        LinkNode* MoveNext() const
+        LinkNode* MoveNext()
         {
-            return reinterpret_cast<LinkNode*>(Util::PtrOffsetBytes(this, GetSize() + PaddedSize<DefaultAlignment>()));
+            return Util::PtrOffsetBytes(this, GetSize() + PaddedSize<DefaultAlignment>());
         }
 
     public:

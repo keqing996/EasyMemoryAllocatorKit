@@ -6,74 +6,55 @@
 using namespace MemoryPool;
 
 template<typename T, size_t alignment, size_t blockSize>
-void AllocateAndDelete(size_t* alreadyAllocateSize, FreeListAllocator<alignment>* pAllocator)
+void AllocateAndDelete()
 {
-    size_t availableSize = pAllocator->GetAvailableSpaceSize();
-
-    T* ptr = CUSTOM_NEW<T>();
-
-    size_t leftAvailableSize = pAllocator->GetAvailableSpaceSize();
-
-    size_t allocationSize = Util::UpAlignment<sizeof(T), alignment>();
-    void* pMemBlock = pAllocator->GetMemoryBlockPtr();
-    void* pCurrent = pAllocator->GetCurrentPtr();
-
-    if (*alreadyAllocateSize + allocationSize > blockSize)
-    {
-        std::cout << std::format("Allocation failed, pMem = 0x{:x}, pCur = 0x{:x}, need = {}, available = {}, left = {}"
-            , ToAddr(pMemBlock), ToAddr(pCurrent), allocationSize, availableSize, leftAvailableSize) << std::endl;
-        CHECK(ptr == nullptr);
-    }
-    else
-    {
-        *alreadyAllocateSize += allocationSize;
-
-        std::cout << std::format("Allocation success, pMem = 0x{:x}, pCur = 0x{:x}, need = {}, available = {}, left = {}"
-            , ToAddr(pMemBlock), ToAddr(pCurrent), allocationSize, availableSize, leftAvailableSize) << std::endl;
-
-        CHECK(ToAddr(pCurrent) == ToAddr(pMemBlock) + *alreadyAllocateSize);
-        CUSTOM_DELETE(ptr);
-        CHECK(ToAddr(pCurrent) == ToAddr(pMemBlock) + *alreadyAllocateSize);
-    }
-}
-
-template <size_t alignment, size_t blockSize>
-void TestAllocation()
-{
-    std::cout << "======== Test Allocation ========" << std::endl;
-    std::cout << std::format("Alignment = {}, Block Size = {}", alignment, blockSize) << std::endl;
-
     AllocatorScope<FreeListAllocator<alignment>> allocator(blockSize);
-
     auto* pAllocator = AllocatorScope<FreeListAllocator<alignment>>::CastAllocator();
 
-    void* pMemBlock = pAllocator->GetMemoryBlockPtr();
-    void* pCurrent = pAllocator->GetCurrentPtr();
-    size_t alreadyAllocateSize = 0;
+    size_t allocationSize = Util::UpAlignment<sizeof(T), alignment>();
+    size_t headerSize = LinkNode::PaddedSize<alignment>();
+    size_t cellSize = allocationSize + headerSize;
 
-    std::cout << std::format("Allocator block start addr: 0x{:x}", ToAddr(pMemBlock)) << std::endl;
-    CHECK(pMemBlock != nullptr);
-    CHECK(pMemBlock == pCurrent);
+    size_t numberToAllocate = blockSize / cellSize;
 
-    AllocateAndDelete<uint32_t, alignment, blockSize>(&alreadyAllocateSize, pAllocator);
-    AllocateAndDelete<uint32_t, alignment, blockSize>(&alreadyAllocateSize, pAllocator);
-    AllocateAndDelete<uint64_t, alignment, blockSize>(&alreadyAllocateSize, pAllocator);
-    AllocateAndDelete<Data64B, alignment, blockSize>(&alreadyAllocateSize, pAllocator);
-    AllocateAndDelete<Data64B, alignment, blockSize>(&alreadyAllocateSize, pAllocator);
-    AllocateAndDelete<Data128B, alignment, blockSize>(&alreadyAllocateSize, pAllocator);
-    AllocateAndDelete<uint32_t, alignment, blockSize>(&alreadyAllocateSize, pAllocator);
-    AllocateAndDelete<uint32_t, alignment, blockSize>(&alreadyAllocateSize, pAllocator);
-    AllocateAndDelete<uint32_t, alignment, blockSize>(&alreadyAllocateSize, pAllocator);
-    AllocateAndDelete<uint32_t, alignment, blockSize>(&alreadyAllocateSize, pAllocator);
-    AllocateAndDelete<Data32B, alignment, blockSize>(&alreadyAllocateSize, pAllocator);
+    // Allocate
+    std::vector<T*> dataVec;
+    LinkNode* pLastNode = nullptr;
+    for (size_t i = 0; i < numberToAllocate; i++)
+    {
+        auto ptr = CUSTOM_NEW<T>();
+        CHECK(ptr != nullptr);
+
+        LinkNode* pCurrentNode = LinkNode::BackStepToLinkNode<alignment>(ptr);
+        CHECK(pCurrentNode->GetPrevNode() == pLastNode);
+        CHECK(pCurrentNode->GetSize() == allocationSize);
+        CHECK(pCurrentNode->Used() == true);
+
+        dataVec.push_back(ptr);
+
+        pLastNode = pCurrentNode->GetPrevNode();
+    }
+
+    // Can not allocate anymore
+    T* pData = CUSTOM_NEW<T>();
+    CHECK(pData == nullptr);
+
+    // Deallocate
+    for (size_t i = 0; i < dataVec.size(); i++)
+        CUSTOM_DELETE<T>(dataVec[i]);
+
+    // Check
+    LinkNode* pFirstNode = pAllocator->GetFirstNode();
+    CHECK(pFirstNode->Used() == false);
+    CHECK(pFirstNode->GetPrevNode() == nullptr);
+    CHECK(pFirstNode->GetSize() == blockSize - headerSize);
 }
 
 TEST_CASE("TestApi")
 {
-    TestAllocation<4, 128>();
-    TestAllocation<4, 256>();
-    TestAllocation<4, 512>();
-    TestAllocation<8, 128>();
-    TestAllocation<8, 256>();
-    TestAllocation<8, 512>();
+    AllocateAndDelete<uint32_t, 4, 128>();
+    AllocateAndDelete<uint32_t, 4, 4096>();
+    AllocateAndDelete<uint32_t, 8, 4096>();
+    AllocateAndDelete<Data64B, 8, 4096>();
+    AllocateAndDelete<Data128B, 8, 4096>();
 }

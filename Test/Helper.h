@@ -46,7 +46,11 @@ T* CUSTOM_NEW()
 template<typename T, typename... Args>
 T* CUSTOM_NEW(Args&&... args)
 {
-    return new (AllocatorMarker(), gAllocator->Allocate(sizeof(T))) T(std::forward<Args>(args)...);
+    void* pMem = gAllocator->Allocate(sizeof(T));
+    if (pMem == nullptr)
+        return nullptr;
+
+    return new (AllocatorMarker(), pMem) T(std::forward<Args>(args)...);
 }
 
 template<typename T>
