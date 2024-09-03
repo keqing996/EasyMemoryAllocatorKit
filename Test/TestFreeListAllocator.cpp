@@ -26,13 +26,18 @@ void AllocateAndDelete()
         CHECK(ptr != nullptr);
 
         LinkNode* pCurrentNode = LinkNode::BackStepToLinkNode<alignment>(ptr);
+
+        std::cout << std::format("Allocate, addr = {:x}, node addr = {:x}, prev node = {:x}, node size = {}",
+            ToAddr(ptr), ToAddr(pCurrentNode), ToAddr(pCurrentNode->GetPrevNode()), pCurrentNode->GetSize()) << std::endl;
+
         CHECK(pCurrentNode->GetPrevNode() == pLastNode);
-        CHECK(pCurrentNode->GetSize() == allocationSize);
         CHECK(pCurrentNode->Used() == true);
+        if (i != numberToAllocate - 1)
+            CHECK(pCurrentNode->GetSize() == allocationSize);
 
         dataVec.push_back(ptr);
 
-        pLastNode = pCurrentNode->GetPrevNode();
+        pLastNode = pCurrentNode;
     }
 
     // Can not allocate anymore

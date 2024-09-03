@@ -130,10 +130,17 @@ namespace MemoryPool
             if (!IsValidHeader(pPrevNode) || pPrevNode->Used())
                 break;
 
+            // Adjust prev node's size
             size_t oldSize = pPrevNode->GetSize();
             size_t newSize = oldSize + LinkNode::PaddedSize<DefaultAlignment>() + pCurrentNode->GetSize();
-            pCurrentNode->ClearData();
             pPrevNode->SetSize(newSize);
+
+            // Adjust next node's prev
+            LinkNode* pNextNode = pCurrentNode->MoveNext<DefaultAlignment>();
+            pNextNode->SetPrevNode(pPrevNode);
+
+            // Clear this node
+            pCurrentNode->ClearData();
 
             // Move backward
             pCurrentNode = pPrevNode;
