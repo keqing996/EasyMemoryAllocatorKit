@@ -86,9 +86,7 @@ namespace MemoryPool
                 {
                     pCurrentNode->SetSize(requiredSize);
 
-                    LinkNode* pNextNode = reinterpret_cast<LinkNode*>(
-                        Util::PtrOffsetBytes(pCurrentNode, headerSize + requiredSize));
-
+                    LinkNode* pNextNode = pCurrentNode->MoveNext<DefaultAlignment>();
                     pNextNode->SetPrevNode(pCurrentNode);
                     pNextNode->SetUsed(false);
                     pNextNode->SetSize(leftSize - headerSize);
@@ -166,6 +164,6 @@ namespace MemoryPool
         size_t dataEndAddr = dataBeginAddr + _size;
         size_t headerStartAddr = Util::ToAddr(pHeader);
         size_t headerEndAddr = headerStartAddr + LinkNode::PaddedSize<DefaultAlignment>();
-        return headerStartAddr >= dataBeginAddr && headerEndAddr <= dataEndAddr;
+        return headerStartAddr >= dataBeginAddr && headerEndAddr < dataEndAddr;
     }
 }
