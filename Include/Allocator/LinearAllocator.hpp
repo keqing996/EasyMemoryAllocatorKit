@@ -43,6 +43,7 @@ namespace MemoryPool
     LinearAllocator<DefaultAlignment>::~LinearAllocator()
     {
         ::free(_pData);
+        _pData = nullptr;
     }
 
     template<size_t DefaultAlignment>
