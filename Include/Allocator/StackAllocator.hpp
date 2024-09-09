@@ -9,7 +9,6 @@ namespace MemoryPool
     template <size_t DefaultAlignment = 4>
     class StackAllocator
     {
-        using FrameHeader = LinkNodeHeader;
     public:
         explicit StackAllocator(size_t size);
         ~StackAllocator();
@@ -20,11 +19,12 @@ namespace MemoryPool
     public:
         void* Allocate(size_t size, size_t alignment = DefaultAlignment);
         void Deallocate(void* p);
+        LinkNode* GetStackTop() const;
 
     private:
-        uint8_t* _pData;
+        void* _pData;
         size_t _size;
-        FrameHeader* _pStackTop;
+        LinkNode* _pStackTop;
     };
 
     template<size_t DefaultAlignment>
@@ -33,14 +33,14 @@ namespace MemoryPool
         , _size(size)
         , _pStackTop(nullptr)
     {
-        if (_size < FrameHeader::PaddedSize<DefaultAlignment>())
-            _size = FrameHeader::PaddedSize<DefaultAlignment>();
+        if (_size < LinkNode::PaddedSize<DefaultAlignment>())
+            _size = LinkNode::PaddedSize<DefaultAlignment>();
 
         _pData = static_cast<uint8_t*>(::malloc(_size));
 
-        _pStackTop = reinterpret_cast<LinkNodeHeader*>(_pData);
+        _pStackTop = static_cast<LinkNode*>(_pData);
         _pStackTop->SetUsed(false);
-        _pStackTop->SetSize(_size - FrameHeader::PaddedSize<DefaultAlignment>());
+        _pStackTop->SetSize(_size - LinkNode::PaddedSize<DefaultAlignment>());
         _pStackTop->SetPrevNode(nullptr);
     }
 
@@ -48,30 +48,31 @@ namespace MemoryPool
     StackAllocator<DefaultAlignment>::~StackAllocator()
     {
         ::free(_pData);
+        _pData = nullptr;
     }
 
     template<size_t DefaultAlignment>
     void* StackAllocator<DefaultAlignment>::Allocate(size_t size, size_t alignment)
     {
-        size_t headerSize = FrameHeader::PaddedSize<DefaultAlignment>();
+        size_t headerSize = LinkNode::PaddedSize<DefaultAlignment>();
         size_t requiredSize = Util::UpAlignment(size, alignment);
 
         if (_pStackTop->Used() || requiredSize < _pStackTop->GetSize())
             return nullptr;
 
-        void* result = _pStackTop + headerSize;
+        void* result = Util::PtrOffsetBytes(_pStackTop, headerSize);
 
         _pStackTop->SetUsed(true);
 
         // Try to create a new header
         size_t leftSpace = _pStackTop->GetSize() - requiredSize;
-        if (leftSpace >= FrameHeader::PaddedSize<DefaultAlignment>())
+        if (leftSpace >= headerSize)
         {
             _pStackTop->SetSize(requiredSize);
 
-            FrameHeader* pNextHeader = Util::PtrOffsetBytes(_pStackTop,headerSize + requiredSize);
+            LinkNode* pNextHeader = _pStackTop->MoveNext<DefaultAlignment>();
             pNextHeader->SetUsed(false);
-            pNextHeader->SetSize(leftSpace);
+            pNextHeader->SetSize(leftSpace - headerSize);
             pNextHeader->SetPrevNode(_pStackTop);
 
             _pStackTop = pNextHeader;
@@ -83,20 +84,31 @@ namespace MemoryPool
     template<size_t DefaultAlignment>
     void StackAllocator<DefaultAlignment>::Deallocate(void* p)
     {
-        size_t headerSize = FrameHeader::PaddedSize<DefaultAlignment>();
-        FrameHeader* pHeader = reinterpret_cast<LinkNodeHeader*>(Util::PtrOffsetBytes(p, -headerSize));
+        size_t headerSize = LinkNode::PaddedSize<DefaultAlignment>();
+        LinkNode* pHeader = LinkNode::BackStepToLinkNode<DefaultAlignment>(p);
         pHeader->SetUsed(false);
 
         if (pHeader == _pStackTop)
         {
             while (_pStackTop->GetPrevNode() != nullptr && !_pStackTop->GetPrevNode()->Used())
-                _pStackTop = _pStackTop->GetPrevNode();
+            {
+                LinkNode* pPrevNode = _pStackTop->GetPrevNode();
+                _pStackTop->ClearData();
+                _pStackTop = pPrevNode;
+            }
 
-            size_t leftSpace = reinterpret_cast<size_t>(_pData) + _size
-                - reinterpret_cast<size_t>(Util::PtrOffsetBytes(_pStackTop, headerSize));
+            size_t dataEndAddr = reinterpret_cast<size_t>(_pData) + _size;
+            size_t stackTopDataAddr = reinterpret_cast<size_t>(Util::PtrOffsetBytes(_pStackTop, headerSize));
+            size_t leftSpace = dataEndAddr - stackTopDataAddr;
 
             _pStackTop->SetSize(leftSpace);
         }
+    }
+
+    template<size_t DefaultAlignment>
+    LinkNode* StackAllocator<DefaultAlignment>::GetStackTop() const
+    {
+        return _pStackTop;
     }
 }
 
