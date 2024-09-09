@@ -54,6 +54,7 @@ namespace MemoryPool
     FreeListAllocator<DefaultAlignment>::~FreeListAllocator()
     {
         ::free(_pData);
+        _pData = nullptr;
     }
 
     template<size_t DefaultAlignment>
@@ -135,7 +136,8 @@ namespace MemoryPool
 
             // Adjust next node's prev
             LinkNode* pNextNode = pCurrentNode->MoveNext<DefaultAlignment>();
-            pNextNode->SetPrevNode(pPrevNode);
+            if (IsValidHeader(pNextNode))
+                pNextNode->SetPrevNode(pPrevNode);
 
             // Clear this node
             pCurrentNode->ClearData();
