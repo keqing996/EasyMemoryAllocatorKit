@@ -1,24 +1,26 @@
 #pragma once
 
 #include <cstdint>
+#include "Allocator.hpp"
 #include "Util/Util.hpp"
 #include "Util/LinkNodeHeader.hpp"
 
 namespace MemoryPool
 {
     template <size_t DefaultAlignment = 4>
-    class StackAllocator
+    class StackAllocator: public Allocator
     {
     public:
         explicit StackAllocator(size_t size);
-        ~StackAllocator();
+        ~StackAllocator() override;
 
         StackAllocator(const StackAllocator& rhs) = delete;
         StackAllocator(StackAllocator&& rhs) = delete;
 
     public:
-        void* Allocate(size_t size, size_t alignment = DefaultAlignment);
-        void Deallocate(void* p);
+        void* Allocate(size_t size) override;
+        void* Allocate(size_t size, size_t alignment) override;
+        void Deallocate(void* p) override;
         LinkNode* GetStackTop() const;
 
     private:
@@ -49,6 +51,12 @@ namespace MemoryPool
     {
         ::free(_pData);
         _pData = nullptr;
+    }
+
+    template<size_t DefaultAlignment>
+    void* StackAllocator<DefaultAlignment>::Allocate(size_t size)
+    {
+        return Allocate(size, DefaultAlignment);
     }
 
     template<size_t DefaultAlignment>
