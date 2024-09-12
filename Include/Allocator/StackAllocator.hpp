@@ -65,7 +65,9 @@ namespace MemoryPool
         size_t headerSize = LinkNode::PaddedSize<DefaultAlignment>();
         size_t requiredSize = Util::UpAlignment(size, alignment);
 
-        if (_pStackTop->Used() || requiredSize < _pStackTop->GetSize())
+        // Make sure that this is always an empty stack top node.
+        size_t reallyNeedSize = requiredSize + headerSize;
+        if (reallyNeedSize > _pStackTop->GetSize())
             return nullptr;
 
         void* result = Util::PtrOffsetBytes(_pStackTop, headerSize);
@@ -74,17 +76,14 @@ namespace MemoryPool
 
         // Try to create a new header
         size_t leftSpace = _pStackTop->GetSize() - requiredSize;
-        if (leftSpace >= headerSize)
-        {
-            _pStackTop->SetSize(requiredSize);
+        _pStackTop->SetSize(requiredSize);
 
-            LinkNode* pNextHeader = _pStackTop->MoveNext<DefaultAlignment>();
-            pNextHeader->SetUsed(false);
-            pNextHeader->SetSize(leftSpace - headerSize);
-            pNextHeader->SetPrevNode(_pStackTop);
+        LinkNode* pNextHeader = _pStackTop->MoveNext<DefaultAlignment>();
+        pNextHeader->SetUsed(false);
+        pNextHeader->SetSize(leftSpace - headerSize);
+        pNextHeader->SetPrevNode(_pStackTop);
 
-            _pStackTop = pNextHeader;
-        }
+        _pStackTop = pNextHeader;
 
         return result;
     }
@@ -96,20 +95,23 @@ namespace MemoryPool
         LinkNode* pHeader = LinkNode::BackStepToLinkNode<DefaultAlignment>(p);
         pHeader->SetUsed(false);
 
-        if (pHeader == _pStackTop)
+        if (_pStackTop->GetPrevNode() == pHeader)
         {
-            while (_pStackTop->GetPrevNode() != nullptr && !_pStackTop->GetPrevNode()->Used())
+            while (pHeader->GetPrevNode() != nullptr && !pHeader->GetPrevNode()->Used())
             {
-                LinkNode* pPrevNode = _pStackTop->GetPrevNode();
-                _pStackTop->ClearData();
-                _pStackTop = pPrevNode;
+                LinkNode* pPrevNode = pHeader->GetPrevNode();
+
+                size_t newSize = pPrevNode->GetSize() + headerSize + pHeader->GetSize();
+
+                pHeader->ClearData();
+                pHeader = pPrevNode;
+                pHeader->SetSize(newSize);
             }
 
-            size_t dataEndAddr = reinterpret_cast<size_t>(_pData) + _size;
-            size_t stackTopDataAddr = reinterpret_cast<size_t>(Util::PtrOffsetBytes(_pStackTop, headerSize));
-            size_t leftSpace = dataEndAddr - stackTopDataAddr;
-
-            _pStackTop->SetSize(leftSpace);
+            size_t newSize = pHeader->GetSize() + headerSize + _pStackTop->GetSize();
+            _pStackTop->ClearData();
+            _pStackTop = pHeader;
+            _pStackTop->SetSize(newSize);
         }
     }
 
