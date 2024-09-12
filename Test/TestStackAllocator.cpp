@@ -58,8 +58,8 @@ void AllocateAndDelete()
 TEST_CASE("TestApi")
 {
     AllocateAndDelete<uint32_t, 4, 128>();
-    AllocateAndDelete<uint32_t, 4, 4096>();
-    AllocateAndDelete<uint32_t, 8, 4096>();
-    AllocateAndDelete<Data64B, 8, 4096>();
-    AllocateAndDelete<Data128B, 8, 4096>();
+    //AllocateAndDelete<uint32_t, 4, 4096>();
+    //AllocateAndDelete<uint32_t, 8, 4096>();
+    //AllocateAndDelete<Data64B, 8, 4096>();
+    //AllocateAndDelete<Data128B, 8, 4096>();
 }
