@@ -5,7 +5,7 @@
 
 using namespace MemoryPool;
 
-template<typename T, size_t alignment, size_t blockSize>
+template<typename T, size_t alignment, size_t blockSize, bool deleteReverse>
 void AllocateAndDelete()
 {
     AllocatorScope<StackAllocator<alignment>> allocator(blockSize);
@@ -45,8 +45,34 @@ void AllocateAndDelete()
     CHECK(pData == nullptr);
 
     // Deallocate
-    for (size_t i = 0; i < dataVec.size(); i++)
-        CUSTOM_DELETE<T>(dataVec[i]);
+    if (deleteReverse)
+    {
+        for (int i = dataVec.size() - 1; i >= 0; i--)
+        {
+            LinkNode* pCurrentStackTop = pAllocator->GetStackTop();
+            LinkNode* pPrevFrame = pCurrentStackTop->GetPrevNode();
+
+            CUSTOM_DELETE<T>(dataVec[i]);
+
+            CHECK(pAllocator->GetStackTop() == pPrevFrame);
+        }
+    }
+    else
+    {
+        for (size_t i = 0; i < dataVec.size(); i++)
+        {
+            LinkNode* pCurrentStackTop = pAllocator->GetStackTop();
+            bool isStackTop = LinkNode::BackStepToLinkNode<alignment>(dataVec[i]) == pCurrentStackTop;
+
+            CUSTOM_DELETE<T>(dataVec[i]);
+
+            if (!isStackTop)
+                CHECK(pCurrentStackTop == pAllocator->GetStackTop());
+            else
+                CHECK(pAllocator->GetStackTop() == nullptr);
+        }
+    }
+
 
     // Check
     LinkNode* pFirstNode = pAllocator->GetStackTop();
@@ -55,9 +81,15 @@ void AllocateAndDelete()
 
 TEST_CASE("TestApi")
 {
-    AllocateAndDelete<uint32_t, 4, 128>();
-    //AllocateAndDelete<uint32_t, 4, 4096>();
-    //AllocateAndDelete<uint32_t, 8, 4096>();
-    //AllocateAndDelete<Data64B, 8, 4096>();
-    //AllocateAndDelete<Data128B, 8, 4096>();
+    AllocateAndDelete<uint32_t, 4, 128, true>();
+    AllocateAndDelete<uint32_t, 4, 4096, true>();
+    AllocateAndDelete<uint32_t, 8, 4096, true>();
+    AllocateAndDelete<Data64B, 8, 4096, true>();
+    AllocateAndDelete<Data128B, 8, 4096, true>();
+
+    AllocateAndDelete<uint32_t, 4, 128, false>();
+    AllocateAndDelete<uint32_t, 4, 4096, false>();
+    AllocateAndDelete<uint32_t, 8, 4096, false>();
+    AllocateAndDelete<Data64B, 8, 4096, false>();
+    AllocateAndDelete<Data128B, 8, 4096, false>();
 }
