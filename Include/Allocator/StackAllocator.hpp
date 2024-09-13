@@ -62,12 +62,13 @@ namespace MemoryPool
     template<size_t DefaultAlignment>
     void* StackAllocator<DefaultAlignment>::Allocate(size_t size, size_t alignment)
     {
+        if (_pStackTop->Used())
+            return nullptr;
+
         size_t headerSize = LinkNode::PaddedSize<DefaultAlignment>();
         size_t requiredSize = Util::UpAlignment(size, alignment);
 
-        // Make sure that this is always an empty stack top node.
-        size_t reallyNeedSize = requiredSize + headerSize;
-        if (reallyNeedSize > _pStackTop->GetSize())
+        if (requiredSize > _pStackTop->GetSize())
             return nullptr;
 
         void* result = Util::PtrOffsetBytes(_pStackTop, headerSize);
@@ -76,14 +77,17 @@ namespace MemoryPool
 
         // Try to create a new header
         size_t leftSpace = _pStackTop->GetSize() - requiredSize;
-        _pStackTop->SetSize(requiredSize);
+        if (leftSpace > headerSize)
+        {
+            _pStackTop->SetSize(requiredSize);
 
-        LinkNode* pNextHeader = _pStackTop->MoveNext<DefaultAlignment>();
-        pNextHeader->SetUsed(false);
-        pNextHeader->SetSize(leftSpace - headerSize);
-        pNextHeader->SetPrevNode(_pStackTop);
+            LinkNode* pNextHeader = _pStackTop->MoveNext<DefaultAlignment>();
+            pNextHeader->SetUsed(false);
+            pNextHeader->SetSize(leftSpace - headerSize);
+            pNextHeader->SetPrevNode(_pStackTop);
 
-        _pStackTop = pNextHeader;
+            _pStackTop = pNextHeader;
+        }
 
         return result;
     }
@@ -95,7 +99,7 @@ namespace MemoryPool
         LinkNode* pHeader = LinkNode::BackStepToLinkNode<DefaultAlignment>(p);
         pHeader->SetUsed(false);
 
-        if (_pStackTop->GetPrevNode() == pHeader)
+        if (!_pStackTop->Used() && _pStackTop->GetPrevNode() == pHeader)
         {
             while (pHeader->GetPrevNode() != nullptr && !pHeader->GetPrevNode()->Used())
             {
