@@ -50,9 +50,7 @@ void AllocateAndDelete()
 
     // Check
     LinkNode* pFirstNode = pAllocator->GetStackTop();
-    CHECK(pFirstNode->Used() == false);
-    CHECK(pFirstNode->GetPrevNode() == nullptr);
-    CHECK(pFirstNode->GetSize() == blockSize - headerSize);
+    CHECK(pFirstNode == nullptr);
 }
 
 TEST_CASE("TestApi")
