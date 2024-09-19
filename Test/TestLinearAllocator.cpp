@@ -11,7 +11,7 @@ void AllocateAndDelete(size_t* alreadyAllocateSize, LinearAllocator<alignment>* 
 {
     size_t availableSize = pAllocator->GetAvailableSpaceSize();
 
-    T* ptr = CUSTOM_NEW<T>();
+    T* ptr = CUSTOM_NEW<T>(pAllocator);
 
     size_t leftAvailableSize = pAllocator->GetAvailableSpaceSize();
 
@@ -33,7 +33,7 @@ void AllocateAndDelete(size_t* alreadyAllocateSize, LinearAllocator<alignment>* 
             , ToAddr(pMemBlock), ToAddr(pCurrent), allocationSize, availableSize, leftAvailableSize) << std::endl;
 
         CHECK(ToAddr(pCurrent) == ToAddr(pMemBlock) + *alreadyAllocateSize);
-        CUSTOM_DELETE(ptr);
+        CUSTOM_DELETE(pAllocator, ptr);
         CHECK(ToAddr(pCurrent) == ToAddr(pMemBlock) + *alreadyAllocateSize);
     }
 }
@@ -44,29 +44,27 @@ void TestAllocation()
     std::cout << "======== Test Allocation ========" << std::endl;
     std::cout << std::format("Alignment = {}, Block Size = {}", alignment, blockSize) << std::endl;
 
-    AllocatorScope<LinearAllocator<alignment>> allocator(blockSize);
+    LinearAllocator<alignment> allocator(blockSize);
 
-    auto* pAllocator = AllocatorScope<LinearAllocator<alignment>>::CastAllocator();
-
-    void* pMemBlock = pAllocator->GetMemoryBlockPtr();
-    void* pCurrent = pAllocator->GetCurrentPtr();
+    void* pMemBlock = allocator.GetMemoryBlockPtr();
+    void* pCurrent = allocator.GetCurrentPtr();
     size_t alreadyAllocateSize = 0;
 
     std::cout << std::format("Allocator block start addr: 0x{:x}", ToAddr(pMemBlock)) << std::endl;
     CHECK(pMemBlock != nullptr);
     CHECK(pMemBlock == pCurrent);
 
-    AllocateAndDelete<uint32_t, alignment, blockSize>(&alreadyAllocateSize, pAllocator);
-    AllocateAndDelete<uint32_t, alignment, blockSize>(&alreadyAllocateSize, pAllocator);
-    AllocateAndDelete<uint64_t, alignment, blockSize>(&alreadyAllocateSize, pAllocator);
-    AllocateAndDelete<Data64B, alignment, blockSize>(&alreadyAllocateSize, pAllocator);
-    AllocateAndDelete<Data64B, alignment, blockSize>(&alreadyAllocateSize, pAllocator);
-    AllocateAndDelete<Data128B, alignment, blockSize>(&alreadyAllocateSize, pAllocator);
-    AllocateAndDelete<uint32_t, alignment, blockSize>(&alreadyAllocateSize, pAllocator);
-    AllocateAndDelete<uint32_t, alignment, blockSize>(&alreadyAllocateSize, pAllocator);
-    AllocateAndDelete<uint32_t, alignment, blockSize>(&alreadyAllocateSize, pAllocator);
-    AllocateAndDelete<uint32_t, alignment, blockSize>(&alreadyAllocateSize, pAllocator);
-    AllocateAndDelete<Data32B, alignment, blockSize>(&alreadyAllocateSize, pAllocator);
+    AllocateAndDelete<uint32_t, alignment, blockSize>(&alreadyAllocateSize, &allocator);
+    AllocateAndDelete<uint32_t, alignment, blockSize>(&alreadyAllocateSize, &allocator);
+    AllocateAndDelete<uint64_t, alignment, blockSize>(&alreadyAllocateSize, &allocator);
+    AllocateAndDelete<Data64B, alignment, blockSize>(&alreadyAllocateSize, &allocator);
+    AllocateAndDelete<Data64B, alignment, blockSize>(&alreadyAllocateSize, &allocator);
+    AllocateAndDelete<Data128B, alignment, blockSize>(&alreadyAllocateSize, &allocator);
+    AllocateAndDelete<uint32_t, alignment, blockSize>(&alreadyAllocateSize, &allocator);
+    AllocateAndDelete<uint32_t, alignment, blockSize>(&alreadyAllocateSize, &allocator);
+    AllocateAndDelete<uint32_t, alignment, blockSize>(&alreadyAllocateSize, &allocator);
+    AllocateAndDelete<uint32_t, alignment, blockSize>(&alreadyAllocateSize, &allocator);
+    AllocateAndDelete<Data32B, alignment, blockSize>(&alreadyAllocateSize, &allocator);
 }
 
 TEST_CASE("TestApi")
