@@ -11,7 +11,7 @@ void AllocateAndDelete(size_t* alreadyAllocateSize, LinearAllocator<alignment>* 
 {
     size_t availableSize = pAllocator->GetAvailableSpaceSize();
 
-    T* ptr = CUSTOM_NEW<T>(pAllocator);
+    T* ptr = Alloc::New<T>(pAllocator);
 
     size_t leftAvailableSize = pAllocator->GetAvailableSpaceSize();
 
@@ -33,7 +33,9 @@ void AllocateAndDelete(size_t* alreadyAllocateSize, LinearAllocator<alignment>* 
             , ToAddr(pMemBlock), ToAddr(pCurrent), allocationSize, availableSize, leftAvailableSize) << std::endl;
 
         CHECK(ToAddr(pCurrent) == ToAddr(pMemBlock) + *alreadyAllocateSize);
-        CUSTOM_DELETE(pAllocator, ptr);
+
+        Alloc::Delete(pAllocator, ptr);
+
         CHECK(ToAddr(pCurrent) == ToAddr(pMemBlock) + *alreadyAllocateSize);
     }
 }

@@ -67,7 +67,7 @@ namespace MemoryPool
             return nullptr;
 
         _pStackTop->SetUsed(true);
-        Util::PtrOffsetBytes(_pStackTop, headerSize);
+        return Util::PtrOffsetBytes(_pStackTop, headerSize);
     }
 
     template<size_t DefaultAlignment>

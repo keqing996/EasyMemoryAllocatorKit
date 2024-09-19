@@ -8,8 +8,7 @@ using namespace MemoryPool;
 template<typename T, size_t alignment, size_t blockSize>
 void AllocateAndDelete()
 {
-    AllocatorScope<FreeListAllocator<alignment>> allocator(blockSize);
-    auto* pAllocator = AllocatorScope<FreeListAllocator<alignment>>::CastAllocator();
+    FreeListAllocator<alignment> allocator(blockSize);
 
     size_t allocationSize = Util::UpAlignment<sizeof(T), alignment>();
     size_t headerSize = LinkNode::PaddedSize<alignment>();
@@ -22,7 +21,7 @@ void AllocateAndDelete()
     LinkNode* pLastNode = nullptr;
     for (size_t i = 0; i < numberToAllocate; i++)
     {
-        auto ptr = CUSTOM_NEW<T>();
+        auto ptr = Alloc::New<T>(&allocator);
         CHECK(ptr != nullptr);
 
         LinkNode* pCurrentNode = LinkNode::BackStepToLinkNode<alignment>(ptr);
@@ -41,15 +40,15 @@ void AllocateAndDelete()
     }
 
     // Can not allocate anymore
-    T* pData = CUSTOM_NEW<T>();
+    T* pData = Alloc::New<T>(&allocator);
     CHECK(pData == nullptr);
 
     // Deallocate
     for (size_t i = 0; i < dataVec.size(); i++)
-        CUSTOM_DELETE<T>(dataVec[i]);
+        Alloc::Delete(&allocator, dataVec[i]);
 
     // Check
-    LinkNode* pFirstNode = pAllocator->GetFirstNode();
+    LinkNode* pFirstNode = allocator.GetFirstNode();
     CHECK(pFirstNode->Used() == false);
     CHECK(pFirstNode->GetPrevNode() == nullptr);
     CHECK(pFirstNode->GetSize() == blockSize - headerSize);
