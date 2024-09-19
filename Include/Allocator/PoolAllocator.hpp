@@ -1,13 +1,12 @@
 #pragma once
 
 #include <cstdint>
-#include "Allocator.hpp"
 #include "Util/Util.hpp"
 
 namespace MemoryPool
 {
     template <size_t DefaultAlignment = 4>
-    class PoolAllocator: public Allocator
+    class PoolAllocator
     {
     public:
         struct Node
@@ -16,15 +15,16 @@ namespace MemoryPool
         };
 
         explicit PoolAllocator(size_t blockSize, size_t blockNum);
-        ~PoolAllocator() override;
+        ~PoolAllocator();
 
         PoolAllocator(const PoolAllocator& rhs) = delete;
         PoolAllocator(PoolAllocator&& rhs) = delete;
 
     public:
-        void* Allocate(size_t size) override;
-        void* Allocate(size_t size, size_t alignment) override;
-        void Deallocate(void* p) override;
+        void* Allocate();
+        void Deallocate(void* p);
+        size_t GetAvailableBlockCount() const;
+        Node* GetFreeListHeadNode() const;
 
     private:
         void* _pData;
@@ -65,7 +65,41 @@ namespace MemoryPool
     }
 
     template<size_t DefaultAlignment>
-    void* PoolAllocator<DefaultAlignment>::Allocate(size_t size)
+    void* PoolAllocator<DefaultAlignment>::Allocate()
     {
+        if (_pFreeBlockList == nullptr)
+            return nullptr;
+
+        Node* pResult = _pFreeBlockList;
+        _pFreeBlockList = _pFreeBlockList->pNext;
+        return Util::PtrOffsetBytes(pResult, sizeof(Node));
+    }
+
+    template<size_t DefaultAlignment>
+    void PoolAllocator<DefaultAlignment>::Deallocate(void* p)
+    {
+        Node* pNode = static_cast<Node*>(Util::PtrOffsetBytes(p, -sizeof(Node)));
+        pNode->pNext = _pFreeBlockList;
+        _pFreeBlockList = pNode;
+    }
+
+    template<size_t DefaultAlignment>
+    size_t PoolAllocator<DefaultAlignment>::GetAvailableBlockCount() const
+    {
+        size_t count = 0;
+        Node* pCurrent = _pFreeBlockList;
+        while (pCurrent != nullptr)
+        {
+            pCurrent = pCurrent->pNext;
+            count++;
+        }
+
+        return count;
+    }
+
+    template<size_t DefaultAlignment>
+    typename PoolAllocator<DefaultAlignment>::Node* PoolAllocator<DefaultAlignment>::GetFreeListHeadNode() const
+    {
+        return _pFreeBlockList;
     }
 }
