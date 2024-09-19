@@ -3,7 +3,6 @@
 #include <cstddef>
 #include <cstdio>
 #include <format>
-#include "Allocator/Allocator.hpp"
 
 #define ToAddr(x) reinterpret_cast<unsigned long long>(x)
 
@@ -11,56 +10,34 @@ struct AllocatorMarker {};
 inline void* operator new(size_t, AllocatorMarker, void* ptr) { return ptr; }
 inline void operator delete(void*, AllocatorMarker, void*) { }
 
-inline MemoryPool::Allocator* gAllocator = nullptr;
-
-template <typename AllocatorType>
-struct AllocatorScope
+template<typename Allocator, typename T>
+T* CUSTOM_NEW(Allocator* pAllocator)
 {
-    explicit AllocatorScope(size_t blockSize)
-    {
-        gAllocator = new AllocatorType(blockSize);
-    }
-
-    ~AllocatorScope()
-    {
-        delete gAllocator;
-        gAllocator = nullptr;
-    }
-
-    static AllocatorType* CastAllocator()
-    {
-        return dynamic_cast<AllocatorType*>(gAllocator);
-    }
-};
-
-template<typename T>
-T* CUSTOM_NEW()
-{
-    void* pMem = gAllocator->Allocate(sizeof(T));
+    void* pMem = pAllocator->Allocate(sizeof(T));
     if (pMem == nullptr)
         return nullptr;
 
     return new (AllocatorMarker(), pMem) T();
 }
 
-template<typename T, typename... Args>
-T* CUSTOM_NEW(Args&&... args)
+template<typename Allocator, typename T, typename... Args>
+T* CUSTOM_NEW(Allocator* pAllocator, Args&&... args)
 {
-    void* pMem = gAllocator->Allocate(sizeof(T));
+    void* pMem = pAllocator->Allocate(sizeof(T));
     if (pMem == nullptr)
         return nullptr;
 
     return new (AllocatorMarker(), pMem) T(std::forward<Args>(args)...);
 }
 
-template<typename T>
-void CUSTOM_DELETE(T* p)
+template<typename Allocator, typename T>
+void CUSTOM_DELETE(Allocator* pAllocator, T* p)
 {
     if (!p)
         return;
 
     p->~T();
-    gAllocator->Deallocate(p);
+    pAllocator->Deallocate(p);
 }
 
 struct Data16B

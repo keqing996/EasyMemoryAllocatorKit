@@ -1,25 +1,24 @@
 #pragma once
 
 #include <cstdint>
-#include "Allocator.hpp"
 #include "Util/Util.hpp"
 
 namespace MemoryPool
 {
     template <size_t DefaultAlignment = 4>
-    class LinearAllocator: public Allocator
+    class LinearAllocator
     {
     public:
         explicit LinearAllocator(size_t size);
-        ~LinearAllocator() override;
+        ~LinearAllocator();
 
         LinearAllocator(const LinearAllocator& rhs) = delete;
         LinearAllocator(LinearAllocator&& rhs) = delete;
 
     public:
-        void* Allocate(size_t size) override;
-        void* Allocate(size_t size, size_t alignment) override;
-        void Deallocate(void* p) override;
+        void* Allocate(size_t size);
+        void* Allocate(size_t size, size_t alignment);
+        void Deallocate(void* p);
         void Reset();
         void* GetMemoryBlockPtr() const;
         void* GetCurrentPtr() const;

@@ -1,26 +1,25 @@
 #pragma once
 
 #include <cstdint>
-#include "Allocator.hpp"
 #include "Util/Util.hpp"
 #include "Util/LinkNodeHeader.hpp"
 
 namespace MemoryPool
 {
     template <size_t DefaultAlignment = 4>
-    class FreeListAllocator: public Allocator
+    class FreeListAllocator
     {
     public:
         explicit FreeListAllocator(size_t size);
-        ~FreeListAllocator() override;
+        ~FreeListAllocator();
 
         FreeListAllocator(const FreeListAllocator& rhs) = delete;
         FreeListAllocator(FreeListAllocator&& rhs) = delete;
 
     public:
-        void* Allocate(size_t size) override;
-        void* Allocate(size_t size, size_t alignment) override;
-        void Deallocate(void* p) override;
+        void* Allocate(size_t size);
+        void* Allocate(size_t size, size_t alignment);
+        void Deallocate(void* p);
         void* GetMemoryBlockPtr() const;
         LinkNode* GetFirstNode() const;
 
