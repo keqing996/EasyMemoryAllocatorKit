@@ -1,35 +1,29 @@
 cmake_minimum_required(VERSION 3.22)
 
-project (MemoryAllocator)
+project (EasyMemoryAllocatorKit)
 set (CMAKE_CXX_STANDARD 20)
 
 # Library
-add_library                 (lib_allocator INTERFACE)
-target_include_directories  (lib_allocator INTERFACE ./Include)
+add_library                 (eallockit INTERFACE)
+target_include_directories  (eallockit INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 # Test code
-option (ENABLE_ALLOCATOR_TEST OFF)
+option (ENABLE_EALLOCKIT_TEST OFF)
 
-if (ENABLE_ALLOCATOR_TEST)
+function(create_eallockit_test test_name source_file)
+    add_executable          (${test_name} ${source_file})
+    target_link_libraries   (${test_name} PUBLIC eallockit)
+    add_test                (NAME ${test_name} COMMAND ${test_name})
+endfunction()
+
+if (ENABLE_EALLOCKIT_TEST)
     enable_testing()
 
-    add_executable          (test_util Test/TestUtil.cpp)
-    target_link_libraries   (test_util lib_allocator)
-    add_test                (NAME test_util COMMAND test_util)
+    create_eallockit_test (eallockit_test_memory_util                  ${CMAKE_CURRENT_SOURCE_DIR}/test/TestMemoryAllocatorUtil.cpp)
+    create_eallockit_test (eallockit_test_memory_linear_allocator      ${CMAKE_CURRENT_SOURCE_DIR}/test/TestLinearAllocator.cpp)
+    create_eallockit_test (eallockit_test_memory_free_list_allocator   ${CMAKE_CURRENT_SOURCE_DIR}/test/TestFreeListAllocator.cpp)
+    create_eallockit_test (eallockit_test_memory_pool_allocator        ${CMAKE_CURRENT_SOURCE_DIR}/test/TestPoolAllocator.cpp)
+    create_eallockit_test (eallockit_test_memory_stack_allocator       ${CMAKE_CURRENT_SOURCE_DIR}/test/TestStackAllocator.cpp)
+    create_eallockit_test (eallockit_test_memory_tlsf_allocator        ${CMAKE_CURRENT_SOURCE_DIR}/test/TestTLSFAllocator.cpp)
 
-    add_executable          (test_linear_allocator Test/TestLinearAllocator.cpp)
-    target_link_libraries   (test_linear_allocator lib_allocator)
-    add_test                (NAME test_linear_allocator COMMAND test_linear_allocator)
-
-    add_executable          (test_free_list_allocator Test/TestFreeListAllocator.cpp)
-    target_link_libraries   (test_free_list_allocator lib_allocator)
-    add_test                (NAME test_free_list_allocator COMMAND test_free_list_allocator)
-
-    add_executable          (test_pool_allocator Test/TestStackAllocator.cpp)
-    target_link_libraries   (test_pool_allocator lib_allocator)
-    add_test                (NAME test_pool_allocator COMMAND test_pool_allocator)
-
-    add_executable          (test_stack_allocator Test/TestPoolAllocator.cpp)
-    target_link_libraries   (test_stack_allocator lib_allocator)
-    add_test                (NAME test_stack_allocator COMMAND test_stack_allocator)
 endif ()

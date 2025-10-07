@@ -1,30 +1,31 @@
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include "doctest/doctest.h"
 #include <new>
-#include "DocTest.h"
-#include "Allocator/StackAllocator.hpp"
+#include "EAllocKit/StackAllocator.hpp"
 #include "Helper.h"
 
-using namespace MemoryPool;
+using namespace EAllocKit;
 
 template<typename T, size_t alignment, size_t blockSize, bool deleteReverse>
 void AllocateAndDelete()
 {
     StackAllocator<alignment> allocator(blockSize);
 
-    size_t allocationSize = Util::UpAlignment<sizeof(T), alignment>();
-    size_t headerSize = LinkNode::PaddedSize<alignment>();
+    size_t allocationSize = MemoryAllocatorUtil::UpAlignment<sizeof(T), alignment>();
+    size_t headerSize = MemoryAllocatorLinkedNode::PaddedSize<alignment>();
     size_t cellSize = allocationSize + headerSize;
 
     size_t numberToAllocate = blockSize / cellSize;
 
     // Allocate
     std::vector<T*> dataVec;
-    LinkNode* pLastNode = nullptr;
+    MemoryAllocatorLinkedNode* pLastNode = nullptr;
     for (size_t i = 0; i < numberToAllocate; i++)
     {
         auto ptr = Alloc::New<T>(&allocator);
         CHECK(ptr != nullptr);
 
-        LinkNode* pCurrentNode = LinkNode::BackStepToLinkNode<alignment>(ptr);
+        MemoryAllocatorLinkedNode* pCurrentNode = MemoryAllocatorLinkedNode::BackStepToLinkNode<alignment>(ptr);
 
         std::cout << std::format("Allocate, addr = {:x}, node addr = {:x}, prev node = {:x}, node size = {}",
             ToAddr(ptr), ToAddr(pCurrentNode), ToAddr(pCurrentNode->GetPrevNode()), pCurrentNode->GetSize()) << std::endl;
@@ -48,8 +49,8 @@ void AllocateAndDelete()
     {
         for (int i = dataVec.size() - 1; i >= 0; i--)
         {
-            LinkNode* pCurrentStackTop = allocator.GetStackTop();
-            LinkNode* pPrevFrame = pCurrentStackTop->GetPrevNode();
+            MemoryAllocatorLinkedNode* pCurrentStackTop = allocator.GetStackTop();
+            MemoryAllocatorLinkedNode* pPrevFrame = pCurrentStackTop->GetPrevNode();
 
             Alloc::Delete<T>(&allocator, dataVec[i]);
 
@@ -60,8 +61,8 @@ void AllocateAndDelete()
     {
         for (size_t i = 0; i < dataVec.size(); i++)
         {
-            LinkNode* pCurrentStackTop = allocator.GetStackTop();
-            bool isStackTop = LinkNode::BackStepToLinkNode<alignment>(dataVec[i]) == pCurrentStackTop;
+            MemoryAllocatorLinkedNode* pCurrentStackTop = allocator.GetStackTop();
+            bool isStackTop = MemoryAllocatorLinkedNode::BackStepToLinkNode<alignment>(dataVec[i]) == pCurrentStackTop;
 
             Alloc::Delete<T>(&allocator, dataVec[i]);
 
@@ -74,11 +75,11 @@ void AllocateAndDelete()
 
 
     // Check
-    LinkNode* pFirstNode = allocator.GetStackTop();
+    MemoryAllocatorLinkedNode* pFirstNode = allocator.GetStackTop();
     CHECK(pFirstNode == nullptr);
 }
 
-TEST_CASE("TestApi")
+TEST_CASE("StackAllocator - Basic LIFO Operations")
 {
     AllocateAndDelete<uint32_t, 4, 128, true>();
     AllocateAndDelete<uint32_t, 4, 4096, true>();
@@ -91,4 +92,362 @@ TEST_CASE("TestApi")
     AllocateAndDelete<uint32_t, 8, 4096, false>();
     AllocateAndDelete<Data64B, 8, 4096, false>();
     AllocateAndDelete<Data128B, 8, 4096, false>();
+}
+
+TEST_CASE("StackAllocator - LIFO Enforcement")
+{
+    SUBCASE("Correct LIFO deallocation")
+    {
+        StackAllocator<8> allocator(2048);
+        
+        auto* p1 = Alloc::New<Data64B>(&allocator);
+        auto* p2 = Alloc::New<Data64B>(&allocator);
+        auto* p3 = Alloc::New<Data64B>(&allocator);
+        
+        CHECK(p1 != nullptr);
+        CHECK(p2 != nullptr);
+        CHECK(p3 != nullptr);
+        
+        auto* top = allocator.GetStackTop();
+        CHECK(top == MemoryAllocatorLinkedNode::BackStepToLinkNode<8>(p3));
+        
+        // Correct LIFO order
+        Alloc::Delete(&allocator, p3);
+        CHECK(allocator.GetStackTop() == MemoryAllocatorLinkedNode::BackStepToLinkNode<8>(p2));
+        
+        Alloc::Delete(&allocator, p2);
+        CHECK(allocator.GetStackTop() == MemoryAllocatorLinkedNode::BackStepToLinkNode<8>(p1));
+        
+        Alloc::Delete(&allocator, p1);
+        CHECK(allocator.GetStackTop() == nullptr);
+    }
+    
+    SUBCASE("Out-of-order deallocation handling")
+    {
+        StackAllocator<8> allocator(2048);
+        
+        auto* p1 = Alloc::New<Data64B>(&allocator);
+        auto* p2 = Alloc::New<Data64B>(&allocator);
+        auto* p3 = Alloc::New<Data64B>(&allocator);
+        
+        auto* top = allocator.GetStackTop();
+        
+        // Delete middle element - should not change stack top
+        Alloc::Delete(&allocator, p2);
+        CHECK(allocator.GetStackTop() == top);
+        
+        // Delete top - should update stack top
+        Alloc::Delete(&allocator, p3);
+        
+        // Delete first - should work when it becomes accessible
+        Alloc::Delete(&allocator, p1);
+    }
+}
+
+TEST_CASE("StackAllocator - Stack Growth and Shrinkage")
+{
+    SUBCASE("Multiple push and pop")
+    {
+        StackAllocator<8> allocator(4096);
+        
+        std::vector<Data64B*> ptrs;
+        
+        // Push 10 items
+        for (int i = 0; i < 10; i++)
+        {
+            auto* p = Alloc::New<Data64B>(&allocator);
+            CHECK(p != nullptr);
+            ptrs.push_back(p);
+        }
+        
+        auto* top1 = allocator.GetStackTop();
+        CHECK(top1 != nullptr);
+        
+        // Pop 5 items
+        for (int i = 0; i < 5; i++)
+        {
+            Alloc::Delete(&allocator, ptrs.back());
+            ptrs.pop_back();
+        }
+        
+        auto* top2 = allocator.GetStackTop();
+        CHECK(top2 != nullptr);
+        CHECK(top2 != top1);
+        
+        // Push 3 more items
+        for (int i = 0; i < 3; i++)
+        {
+            auto* p = Alloc::New<Data64B>(&allocator);
+            CHECK(p != nullptr);
+            ptrs.push_back(p);
+        }
+        
+        // Pop all remaining
+        while (!ptrs.empty())
+        {
+            Alloc::Delete(&allocator, ptrs.back());
+            ptrs.pop_back();
+        }
+        
+        CHECK(allocator.GetStackTop() == nullptr);
+    }
+    
+    SUBCASE("Interleaved allocations of different sizes")
+    {
+        StackAllocator<8> allocator(8192);
+        
+        auto* p1 = Alloc::New<uint32_t>(&allocator);
+        auto* p2 = Alloc::New<Data128B>(&allocator);
+        auto* p3 = Alloc::New<Data64B>(&allocator);
+        auto* p4 = Alloc::New<uint64_t>(&allocator);
+        
+        CHECK(p1 != nullptr);
+        CHECK(p2 != nullptr);
+        CHECK(p3 != nullptr);
+        CHECK(p4 != nullptr);
+        
+        Alloc::Delete(&allocator, p4);
+        Alloc::Delete(&allocator, p3);
+        Alloc::Delete(&allocator, p2);
+        Alloc::Delete(&allocator, p1);
+        
+        CHECK(allocator.GetStackTop() == nullptr);
+    }
+}
+
+TEST_CASE("StackAllocator - Stack Exhaustion")
+{
+    SUBCASE("Fill stack completely")
+    {
+        StackAllocator<8> allocator(2048);
+        
+        std::vector<uint32_t*> ptrs;
+        while (true)
+        {
+            auto* p = Alloc::New<uint32_t>(&allocator);
+            if (!p) break;
+            ptrs.push_back(p);
+        }
+        
+        CHECK(ptrs.size() > 0);
+        
+        // Try one more - should fail
+        auto* p = Alloc::New<uint32_t>(&allocator);
+        CHECK(p == nullptr);
+        
+        // Pop all
+        for (int i = ptrs.size() - 1; i >= 0; i--)
+        {
+            Alloc::Delete(&allocator, ptrs[i]);
+        }
+        
+        // Should be able to allocate again
+        auto* p2 = Alloc::New<uint32_t>(&allocator);
+        CHECK(p2 != nullptr);
+        Alloc::Delete(&allocator, p2);
+    }
+    
+    SUBCASE("Large allocation in small stack")
+    {
+        StackAllocator<8> allocator(128);
+        
+        auto* p = Alloc::New<Data128B>(&allocator);
+        CHECK(p == nullptr);
+    }
+}
+
+TEST_CASE("StackAllocator - Data Integrity")
+{
+    SUBCASE("Data persists during stack lifecycle")
+    {
+        StackAllocator<8> allocator(4096);
+        
+        std::vector<uint32_t*> ptrs;
+        
+        // Allocate and initialize
+        for (uint32_t i = 0; i < 50; i++)
+        {
+            auto* p = Alloc::New<uint32_t>(&allocator);
+            CHECK(p != nullptr);
+            *p = i * 100;
+            ptrs.push_back(p);
+        }
+        
+        // Verify all values are intact
+        for (size_t i = 0; i < ptrs.size(); i++)
+        {
+            CHECK(*ptrs[i] == i * 100);
+        }
+        
+        // Pop half the stack
+        for (int i = 0; i < 25; i++)
+        {
+            Alloc::Delete(&allocator, ptrs.back());
+            ptrs.pop_back();
+        }
+        
+        // Verify remaining values
+        for (size_t i = 0; i < ptrs.size(); i++)
+        {
+            CHECK(*ptrs[i] == i * 100);
+        }
+        
+        // Cleanup
+        while (!ptrs.empty())
+        {
+            Alloc::Delete(&allocator, ptrs.back());
+            ptrs.pop_back();
+        }
+    }
+    
+    SUBCASE("Complex type on stack")
+    {
+        StackAllocator<8> allocator(4096);
+        
+        auto* p1 = Alloc::New<Data128B>(&allocator);
+        CHECK(p1 != nullptr);
+        
+        // Initialize
+        for (int i = 0; i < 16; i++)
+        {
+            p1->data[i] = i * 10;
+        }
+        
+        auto* p2 = Alloc::New<Data64B>(&allocator);
+        CHECK(p2 != nullptr);
+        
+        // Verify p1 data is still intact
+        for (int i = 0; i < 16; i++)
+        {
+            CHECK(p1->data[i] == i * 10);
+        }
+        
+        Alloc::Delete(&allocator, p2);
+        Alloc::Delete(&allocator, p1);
+    }
+}
+
+TEST_CASE("StackAllocator - Edge Cases")
+{
+    SUBCASE("Single allocation")
+    {
+        StackAllocator<8> allocator(256);
+        
+        auto* p = Alloc::New<uint32_t>(&allocator);
+        CHECK(p != nullptr);
+        CHECK(allocator.GetStackTop() != nullptr);
+        
+        Alloc::Delete(&allocator, p);
+        CHECK(allocator.GetStackTop() == nullptr);
+    }
+    
+    SUBCASE("Very small stack")
+    {
+        StackAllocator<4> allocator(64);
+        
+        auto* p1 = Alloc::New<uint32_t>(&allocator);
+        CHECK(p1 != nullptr);
+        
+        auto* p2 = Alloc::New<uint32_t>(&allocator);
+        // May or may not succeed depending on overhead
+        
+        if (p2)
+        {
+            Alloc::Delete(&allocator, p2);
+        }
+        Alloc::Delete(&allocator, p1);
+    }
+    
+    SUBCASE("Null pointer delete")
+    {
+        StackAllocator<8> allocator(1024);
+        
+        // Should handle null gracefully
+        Alloc::Delete<uint32_t>(&allocator, nullptr);
+    }
+    
+    SUBCASE("Empty stack operations")
+    {
+        StackAllocator<8> allocator(1024);
+        
+        CHECK(allocator.GetStackTop() == nullptr);
+        
+        auto* p = Alloc::New<uint32_t>(&allocator);
+        CHECK(p != nullptr);
+        
+        Alloc::Delete(&allocator, p);
+        CHECK(allocator.GetStackTop() == nullptr);
+    }
+}
+
+TEST_CASE("StackAllocator - Alignment Verification")
+{
+    SUBCASE("Check alignment for all allocations")
+    {
+        StackAllocator<8> allocator(4096);
+        
+        std::vector<uint64_t*> ptrs;
+        for (int i = 0; i < 50; i++)
+        {
+            auto* p = Alloc::New<uint64_t>(&allocator);
+            CHECK(p != nullptr);
+            CHECK(reinterpret_cast<size_t>(p) % 8 == 0);
+            ptrs.push_back(p);
+        }
+        
+        // Pop all in reverse
+        for (int i = ptrs.size() - 1; i >= 0; i--)
+        {
+            Alloc::Delete(&allocator, ptrs[i]);
+        }
+    }
+    
+    SUBCASE("Different alignments")
+    {
+        {
+            StackAllocator<4> allocator(1024);
+            auto* p = Alloc::New<uint32_t>(&allocator);
+            CHECK(reinterpret_cast<size_t>(p) % 4 == 0);
+            Alloc::Delete(&allocator, p);
+        }
+        
+        {
+            StackAllocator<16> allocator(1024);
+            auto* p = Alloc::New<Data128B>(&allocator);
+            CHECK(reinterpret_cast<size_t>(p) % 16 == 0);
+            Alloc::Delete(&allocator, p);
+        }
+    }
+}
+
+TEST_CASE("StackAllocator - Nested Scopes Pattern")
+{
+    SUBCASE("Simulating nested function calls")
+    {
+        StackAllocator<8> allocator(4096);
+        
+        // Scope 1
+        auto* p1 = Alloc::New<Data64B>(&allocator);
+        CHECK(p1 != nullptr);
+        
+        {
+            // Scope 2
+            auto* p2 = Alloc::New<Data64B>(&allocator);
+            CHECK(p2 != nullptr);
+            
+            {
+                // Scope 3
+                auto* p3 = Alloc::New<Data64B>(&allocator);
+                CHECK(p3 != nullptr);
+                
+                Alloc::Delete(&allocator, p3); // Exit scope 3
+            }
+            
+            Alloc::Delete(&allocator, p2); // Exit scope 2
+        }
+        
+        Alloc::Delete(&allocator, p1); // Exit scope 1
+        
+        CHECK(allocator.GetStackTop() == nullptr);
+    }
 }

@@ -2,18 +2,17 @@
 
 #include <cstdlib>
 
-namespace MemoryPool
+namespace EAllocKit
 {
-    class Util
+    class MemoryAllocatorUtil
     {
     public:
-        Util() = delete;
+        MemoryAllocatorUtil() = delete;
 
     public:
         static constexpr size_t HIGHEST_BIT_MASK = static_cast<size_t>(1) << (sizeof(size_t) * 8 - 1);
 
     public:
-
         template <typename T>
         static size_t ToAddr(const T* p)
         {
