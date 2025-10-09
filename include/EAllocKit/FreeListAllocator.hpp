@@ -1,53 +1,16 @@
 #pragma once
 
 #include <cstdint>
+#include <new>
 #include "Util/Util.hpp"
 #include "Util/LinkNodeHeader.hpp"
 
 namespace EAllocKit
 {
-    /**
-     * @brief Free List Allocator
-     * 
-     * @section strategy Allocation Strategy
-     * - Maintains a linked list of free memory blocks
-     * - Uses First Fit strategy to find suitable free blocks
-     * - Supports arbitrary size and alignment requirements
-     * - Returns blocks to the free list on deallocation and attempts to merge adjacent blocks
-     * 
-     * @section advantages
-     * - High flexibility: Supports arbitrary-sized allocations and deallocations
-     * - Memory reuse: Individual blocks can be freed independently for reuse
-     * - Reduces system calls: Pre-allocates large chunks to minimize malloc/free overhead
-     * - Alignment support: Can specify memory alignment requirements
-     * 
-     * @section disadvantages
-     * - Memory fragmentation: Long-term use leads to external fragmentation, reducing utilization
-     * - Performance overhead: Allocation/deallocation requires list traversal with O(n) complexity
-     * - Metadata overhead: Each block requires header information for size and linking
-     * - Cache unfriendly: Scattered memory blocks may result in poor cache locality
-     * - Non-deterministic: Allocation time depends on list length, unsuitable for real-time systems
-     * 
-     * @section use_cases
-     * - Scenarios with varying object lifetimes (need to free objects independently)
-     * - Allocations with widely varying sizes
-     * - Long-running applications requiring memory reuse
-     * - Foundation for general-purpose memory managers
-     * - Game resource managers (textures, audio, etc.)
-     * 
-     * @section not_recommended
-     * - Real-time systems requiring deterministic allocation times
-     * - High-frequency small object allocations (consider PoolAllocator instead)
-     * - Performance-critical hot paths
-     * - LIFO memory usage patterns (use StackAllocator instead)
-     * 
-     * @note Current implementation is single-threaded; external synchronization required for multi-threading
-     */
-    template <size_t DefaultAlignment = 4>
     class FreeListAllocator
     {
     public:
-        explicit FreeListAllocator(size_t size);
+        explicit FreeListAllocator(size_t size, size_t defaultAlignment = 4);
         ~FreeListAllocator();
 
         FreeListAllocator(const FreeListAllocator& rhs) = delete;
@@ -66,44 +29,48 @@ namespace EAllocKit
     private:
         void* _pData;
         size_t _size;
+        size_t _defaultAlignment;
         MemoryAllocatorLinkedNode* _pFirstNode;
     };
 
-    template<size_t DefaultAlignment>
-    FreeListAllocator<DefaultAlignment>::FreeListAllocator(size_t size)
+    inline FreeListAllocator::FreeListAllocator(size_t size, size_t defaultAlignment)
         : _pData(nullptr)
         , _size(size)
+        , _defaultAlignment(defaultAlignment)
         , _pFirstNode(nullptr)
     {
-        if (_size < MemoryAllocatorLinkedNode::PaddedSize<DefaultAlignment>())
-            _size = MemoryAllocatorLinkedNode::PaddedSize<DefaultAlignment>();
+        size_t headerSize = MemoryAllocatorLinkedNode::PaddedSize(_defaultAlignment);
+        if (_size < headerSize)
+            _size = headerSize;
 
         _pData = ::malloc(_size);
+        if (!_pData)
+            throw std::bad_alloc();
 
         _pFirstNode = static_cast<MemoryAllocatorLinkedNode*>(_pData);
         _pFirstNode->SetUsed(false);
-        _pFirstNode->SetSize(_size - MemoryAllocatorLinkedNode::PaddedSize<DefaultAlignment>());
+        _pFirstNode->SetSize(_size - headerSize);
         _pFirstNode->SetPrevNode(nullptr);
     }
 
-    template<size_t DefaultAlignment>
-    FreeListAllocator<DefaultAlignment>::~FreeListAllocator()
+    inline FreeListAllocator::~FreeListAllocator()
     {
-        ::free(_pData);
-        _pData = nullptr;
+        if (_pData) 
+        {
+            ::free(_pData);
+            _pData = nullptr;
+        }
     }
 
-    template<size_t DefaultAlignment>
-    void* FreeListAllocator<DefaultAlignment>::Allocate(size_t size)
+    inline void* FreeListAllocator::Allocate(size_t size)
     {
-        return Allocate(size, DefaultAlignment);
+        return Allocate(size, _defaultAlignment);
     }
 
-    template<size_t DefaultAlignment>
-    void* FreeListAllocator<DefaultAlignment>::Allocate(size_t size, size_t alignment)
+    inline void* FreeListAllocator::Allocate(size_t size, size_t alignment)
     {
-        size_t headerSize = MemoryAllocatorLinkedNode::PaddedSize<DefaultAlignment>();
-        size_t requiredSize = MemoryAllocatorUtil::UpAlignment(size, alignment);
+        const size_t headerSize = MemoryAllocatorLinkedNode::PaddedSize(_defaultAlignment);
+        const size_t requiredSize = MemoryAllocatorUtil::UpAlignment(size, alignment);
 
         MemoryAllocatorLinkedNode* pCurrentNode = _pFirstNode;
         while (true)
@@ -123,7 +90,7 @@ namespace EAllocKit
                 {
                     pCurrentNode->SetSize(requiredSize);
 
-                    MemoryAllocatorLinkedNode* pNextNode = pCurrentNode->MoveNext<DefaultAlignment>();
+                    MemoryAllocatorLinkedNode* pNextNode = pCurrentNode->MoveNext(_defaultAlignment);
                     pNextNode->SetPrevNode(pCurrentNode);
                     pNextNode->SetUsed(false);
                     pNextNode->SetSize(leftSize - headerSize);
@@ -133,27 +100,26 @@ namespace EAllocKit
             }
 
             // Move next
-            pCurrentNode = pCurrentNode->MoveNext<DefaultAlignment>();
+            pCurrentNode = pCurrentNode->MoveNext(_defaultAlignment);
             if (!IsValidHeader(pCurrentNode))
                 pCurrentNode = nullptr;
         }
     }
 
-    template<size_t DefaultAlignment>
-    void FreeListAllocator<DefaultAlignment>::Deallocate(void* p)
+    inline void FreeListAllocator::Deallocate(void* p)
     {
-        MemoryAllocatorLinkedNode* pCurrentNode = MemoryAllocatorLinkedNode::BackStepToLinkNode<DefaultAlignment>(p);
+        MemoryAllocatorLinkedNode* pCurrentNode = MemoryAllocatorLinkedNode::BackStepToLinkNode(p, _defaultAlignment);
         pCurrentNode->SetUsed(false);
 
         // Merge forward
         while (true)
         {
-            MemoryAllocatorLinkedNode* pNextNode = pCurrentNode->MoveNext<DefaultAlignment>();
+            MemoryAllocatorLinkedNode* pNextNode = pCurrentNode->MoveNext(_defaultAlignment);
             if (!IsValidHeader(pNextNode) || pNextNode->Used())
                 break;
 
             size_t oldSize = pCurrentNode->GetSize();
-            size_t newSize = oldSize + MemoryAllocatorLinkedNode::PaddedSize<DefaultAlignment>() + pNextNode->GetSize();
+            size_t newSize = oldSize + MemoryAllocatorLinkedNode::PaddedSize(_defaultAlignment) + pNextNode->GetSize();
             pNextNode->ClearData();
             pCurrentNode->SetSize(newSize);
         }
@@ -166,12 +132,12 @@ namespace EAllocKit
                 break;
 
             // Adjust prev node's size
-            size_t oldSize = pPrevNode->GetSize();
-            size_t newSize = oldSize + MemoryAllocatorLinkedNode::PaddedSize<DefaultAlignment>() + pCurrentNode->GetSize();
+            const size_t oldSize = pPrevNode->GetSize();
+            const size_t newSize = oldSize + MemoryAllocatorLinkedNode::PaddedSize(_defaultAlignment) + pCurrentNode->GetSize();
             pPrevNode->SetSize(newSize);
 
             // Adjust next node's prev
-            MemoryAllocatorLinkedNode* pNextNode = pCurrentNode->MoveNext<DefaultAlignment>();
+            MemoryAllocatorLinkedNode* pNextNode = pCurrentNode->MoveNext(_defaultAlignment);
             if (IsValidHeader(pNextNode))
                 pNextNode->SetPrevNode(pPrevNode);
 
@@ -183,25 +149,22 @@ namespace EAllocKit
         }
     }
 
-    template<size_t DefaultAlignment>
-    void* FreeListAllocator<DefaultAlignment>::GetMemoryBlockPtr() const
+    inline void* FreeListAllocator::GetMemoryBlockPtr() const
     {
         return _pData;
     }
 
-    template<size_t DefaultAlignment>
-    MemoryAllocatorLinkedNode* FreeListAllocator<DefaultAlignment>::GetFirstNode() const
+    inline MemoryAllocatorLinkedNode* FreeListAllocator::GetFirstNode() const
     {
         return _pFirstNode;
     }
 
-    template<size_t DefaultAlignment>
-    bool FreeListAllocator<DefaultAlignment>::IsValidHeader(const MemoryAllocatorLinkedNode* pHeader) const
+    inline bool FreeListAllocator::IsValidHeader(const MemoryAllocatorLinkedNode* pHeader) const
     {
-        size_t dataBeginAddr = MemoryAllocatorUtil::ToAddr(_pData);
-        size_t dataEndAddr = dataBeginAddr + _size;
-        size_t headerStartAddr = MemoryAllocatorUtil::ToAddr(pHeader);
-        size_t headerEndAddr = headerStartAddr + MemoryAllocatorLinkedNode::PaddedSize<DefaultAlignment>();
+        const size_t dataBeginAddr = MemoryAllocatorUtil::ToAddr(_pData);
+        const size_t dataEndAddr = dataBeginAddr + _size;
+        const size_t headerStartAddr = MemoryAllocatorUtil::ToAddr(pHeader);
+        const size_t headerEndAddr = headerStartAddr + MemoryAllocatorLinkedNode::PaddedSize(_defaultAlignment);
         return headerStartAddr >= dataBeginAddr && headerEndAddr < dataEndAddr;
     }
 }

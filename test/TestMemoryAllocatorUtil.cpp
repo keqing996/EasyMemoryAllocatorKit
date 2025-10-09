@@ -161,11 +161,11 @@ TEST_SUITE("MemoryAllocatorUtil")
             uint8_t buffer[256];
             uint8_t* base = buffer;
             
-            auto* offset1 = MemoryAllocatorUtil::PtrOffsetBytes(base, 10);
+            auto* offset1 = MemoryAllocatorUtil::PtrOffsetBytes(base, ptrdiff_t(10));
             CHECK(offset1 == base + 10);
             CHECK(MemoryAllocatorUtil::ToAddr(offset1) == MemoryAllocatorUtil::ToAddr(base) + 10);
             
-            auto* offset2 = MemoryAllocatorUtil::PtrOffsetBytes(base, 100);
+            auto* offset2 = MemoryAllocatorUtil::PtrOffsetBytes(base, ptrdiff_t(100));
             CHECK(offset2 == base + 100);
             CHECK(MemoryAllocatorUtil::ToAddr(offset2) == MemoryAllocatorUtil::ToAddr(base) + 100);
         }
@@ -175,7 +175,7 @@ TEST_SUITE("MemoryAllocatorUtil")
             uint8_t buffer[128];
             uint8_t* base = buffer;
             
-            auto* offset = MemoryAllocatorUtil::PtrOffsetBytes(base, 0);
+            auto* offset = MemoryAllocatorUtil::PtrOffsetBytes(base, ptrdiff_t(0));
             CHECK(offset == base);
         }
     }

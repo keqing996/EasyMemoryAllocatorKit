@@ -10,10 +10,10 @@ using namespace EAllocKit;
 template<typename T, size_t alignment, size_t blockSize>
 void AllocateAndDelete()
 {
-    FreeListAllocator<alignment> allocator(blockSize);
+    FreeListAllocator allocator(blockSize, alignment);
 
     size_t allocationSize = MemoryAllocatorUtil::UpAlignment<sizeof(T), alignment>();
-    size_t headerSize = MemoryAllocatorLinkedNode::PaddedSize<alignment>();
+    size_t headerSize = MemoryAllocatorLinkedNode::PaddedSize(alignment);
     size_t cellSize = allocationSize + headerSize;
 
     size_t numberToAllocate = blockSize / cellSize;
@@ -26,7 +26,7 @@ void AllocateAndDelete()
         auto ptr = Alloc::New<T>(&allocator);
         CHECK(ptr != nullptr);
 
-        MemoryAllocatorLinkedNode* pCurrentNode = MemoryAllocatorLinkedNode::BackStepToLinkNode<alignment>(ptr);
+        MemoryAllocatorLinkedNode* pCurrentNode = MemoryAllocatorLinkedNode::BackStepToLinkNode(ptr, alignment);
 
         std::cout << std::format("Allocate, addr = {:x}, node addr = {:x}, prev node = {:x}, node size = {}",
             ToAddr(ptr), ToAddr(pCurrentNode), ToAddr(pCurrentNode->GetPrevNode()), pCurrentNode->GetSize()) << std::endl;
@@ -69,7 +69,7 @@ TEST_CASE("FreeListAllocator - Fragmentation and Coalescing")
 {
     SUBCASE("Free and reallocate same size")
     {
-        FreeListAllocator<8> allocator(4096);
+        FreeListAllocator allocator(4096, 8);
         
         // Allocate
         auto* p1 = Alloc::New<Data64B>(&allocator);
@@ -94,7 +94,7 @@ TEST_CASE("FreeListAllocator - Fragmentation and Coalescing")
     
     SUBCASE("Coalesce adjacent free blocks")
     {
-        FreeListAllocator<8> allocator(4096);
+        FreeListAllocator allocator(4096, 8);
         
         auto* p1 = Alloc::New<Data64B>(&allocator);
         auto* p2 = Alloc::New<Data64B>(&allocator);
@@ -114,7 +114,7 @@ TEST_CASE("FreeListAllocator - Fragmentation and Coalescing")
     
     SUBCASE("Fragmentation pattern")
     {
-        FreeListAllocator<8> allocator(8192);
+        FreeListAllocator allocator(8192, 8);
         
         std::vector<Data64B*> ptrs;
         for (int i = 0; i < 50; i++)
@@ -149,7 +149,7 @@ TEST_CASE("FreeListAllocator - Variable Size Allocations")
 {
     SUBCASE("Mixed sizes")
     {
-        FreeListAllocator<8> allocator(8192);
+        FreeListAllocator allocator(8192, 8);
         
         auto* small1 = Alloc::New<uint32_t>(&allocator);
         auto* large1 = Alloc::New<Data128B>(&allocator);
@@ -175,7 +175,7 @@ TEST_CASE("FreeListAllocator - Variable Size Allocations")
     
     SUBCASE("Allocate larger than available")
     {
-        FreeListAllocator<8> allocator(256);
+        FreeListAllocator allocator(256, 8);
         
         // Try to allocate more than available
         auto* p = Alloc::New<Data128B>(&allocator);
@@ -193,7 +193,7 @@ TEST_CASE("FreeListAllocator - Edge Cases")
 {
     SUBCASE("Double free detection")
     {
-        FreeListAllocator<8> allocator(1024);
+        FreeListAllocator allocator(1024, 8);
         
         auto* p = Alloc::New<uint32_t>(&allocator);
         CHECK(p != nullptr);
@@ -207,7 +207,7 @@ TEST_CASE("FreeListAllocator - Edge Cases")
     
     SUBCASE("Very small allocator")
     {
-        FreeListAllocator<4> allocator(64);
+        FreeListAllocator allocator(64, 4);
         
         auto* p1 = Alloc::New<uint32_t>(&allocator);
         CHECK(p1 != nullptr);
@@ -221,7 +221,7 @@ TEST_CASE("FreeListAllocator - Edge Cases")
     
     SUBCASE("Allocate entire pool")
     {
-        FreeListAllocator<8> allocator(1024);
+        FreeListAllocator allocator(1024, 8);
         
         std::vector<uint32_t*> ptrs;
         while (true)
@@ -247,7 +247,7 @@ TEST_CASE("FreeListAllocator - Edge Cases")
     
     SUBCASE("Random allocation/deallocation pattern")
     {
-        FreeListAllocator<8> allocator(16384);
+        FreeListAllocator allocator(16384, 8);
         std::vector<Data64B*> active;
         
         for (int i = 0; i < 100; i++)
@@ -280,7 +280,7 @@ TEST_CASE("FreeListAllocator - Alignment Tests")
     SUBCASE("Different alignments")
     {
         {
-            FreeListAllocator<4> allocator(1024);
+            FreeListAllocator allocator(1024, 4);
             auto* p = Alloc::New<uint32_t>(&allocator);
             CHECK(p != nullptr);
             CHECK(reinterpret_cast<size_t>(p) % 4 == 0);
@@ -288,7 +288,7 @@ TEST_CASE("FreeListAllocator - Alignment Tests")
         }
         
         {
-            FreeListAllocator<8> allocator(1024);
+            FreeListAllocator allocator(1024, 8);
             auto* p = Alloc::New<uint64_t>(&allocator);
             CHECK(p != nullptr);
             CHECK(reinterpret_cast<size_t>(p) % 8 == 0);
@@ -296,7 +296,7 @@ TEST_CASE("FreeListAllocator - Alignment Tests")
         }
         
         {
-            FreeListAllocator<16> allocator(1024);
+            FreeListAllocator allocator(1024, 4);
             auto* p = Alloc::New<Data128B>(&allocator);
             CHECK(p != nullptr);
             CHECK(reinterpret_cast<size_t>(p) % 16 == 0);

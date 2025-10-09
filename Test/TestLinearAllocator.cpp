@@ -7,7 +7,7 @@
 using namespace EAllocKit;
 
 template<typename T, size_t alignment, size_t blockSize>
-void AllocateAndDelete(size_t* alreadyAllocateSize, LinearAllocator<alignment>* pAllocator)
+void AllocateAndDelete(size_t* alreadyAllocateSize, LinearAllocator* pAllocator)
 {
     size_t availableSize = pAllocator->GetAvailableSpaceSize();
 
@@ -46,7 +46,7 @@ void TestAllocation()
     std::cout << "======== Test Allocation ========" << std::endl;
     std::cout << std::format("Alignment = {}, Block Size = {}", alignment, blockSize) << std::endl;
 
-    LinearAllocator<alignment> allocator(blockSize);
+    LinearAllocator allocator(blockSize, alignment);
 
     void* pMemBlock = allocator.GetMemoryBlockPtr();
     void* pCurrent = allocator.GetCurrentPtr();
@@ -83,7 +83,7 @@ TEST_CASE("LinearAllocator - Reset Functionality")
 {
     SUBCASE("Reset and reallocate")
     {
-        LinearAllocator<8> allocator(1024);
+        LinearAllocator allocator(1024, 8);
         
         auto* p1 = Alloc::New<Data64B>(&allocator);
         auto* p2 = Alloc::New<Data64B>(&allocator);
@@ -103,7 +103,7 @@ TEST_CASE("LinearAllocator - Reset Functionality")
     
     SUBCASE("Multiple resets")
     {
-        LinearAllocator<8> allocator(2048);
+        LinearAllocator allocator(2048, 8);
         
         for (int cycle = 0; cycle < 5; cycle++)
         {
@@ -123,7 +123,7 @@ TEST_CASE("LinearAllocator - Reset Functionality")
     
     SUBCASE("Reset with partial allocation")
     {
-        LinearAllocator<8> allocator(1024);
+        LinearAllocator allocator(1024, 8);
         
         auto* p1 = Alloc::New<uint32_t>(&allocator);
         size_t availableAfterOne = allocator.GetAvailableSpaceSize();
@@ -141,7 +141,7 @@ TEST_CASE("LinearAllocator - Memory Exhaustion")
 {
     SUBCASE("Fill allocator completely")
     {
-        LinearAllocator<8> allocator(1024);
+        LinearAllocator allocator(1024, 8);
         
         std::vector<uint32_t*> ptrs;
         while (true)
@@ -166,7 +166,7 @@ TEST_CASE("LinearAllocator - Memory Exhaustion")
     
     SUBCASE("Large allocation in small pool")
     {
-        LinearAllocator<8> allocator(128);
+        LinearAllocator allocator(128, 8);
         
         // Data128B is exactly 128 bytes, which should fit in a 128-byte pool
         // But a 129-byte object or larger should fail
@@ -188,7 +188,7 @@ TEST_CASE("LinearAllocator - Memory Exhaustion")
     SUBCASE("Exact fit allocation")
     {
         size_t size = 256;
-        LinearAllocator<8> allocator(size);
+        LinearAllocator allocator(size);
         
         // Calculate exact size we can allocate
         size_t firstAlloc = allocator.GetAvailableSpaceSize();
@@ -210,7 +210,7 @@ TEST_CASE("LinearAllocator - Different Sizes")
 {
     SUBCASE("Sequential different sizes")
     {
-        LinearAllocator<8> allocator(2048);
+        LinearAllocator allocator(2048, 8);
         
         auto* p1 = Alloc::New<uint32_t>(&allocator);
         auto* p2 = Alloc::New<uint64_t>(&allocator);
@@ -233,7 +233,7 @@ TEST_CASE("LinearAllocator - Different Sizes")
     
     SUBCASE("Interleaved allocations")
     {
-        LinearAllocator<8> allocator(4096);
+        LinearAllocator allocator(4096, 8);
         
         std::vector<void*> ptrs;
         for (int i = 0; i < 20; i++)
@@ -254,7 +254,7 @@ TEST_CASE("LinearAllocator - Alignment Verification")
 {
     SUBCASE("Check alignment after multiple allocations")
     {
-        LinearAllocator<8> allocator(2048);
+        LinearAllocator allocator(2048, 8);
         
         for (int i = 0; i < 20; i++)
         {
@@ -267,13 +267,13 @@ TEST_CASE("LinearAllocator - Alignment Verification")
     SUBCASE("Different alignment requirements")
     {
         {
-            LinearAllocator<4> allocator(1024);
+            LinearAllocator allocator(1024, 8);
             auto* p = Alloc::New<uint32_t>(&allocator);
             CHECK(reinterpret_cast<size_t>(p) % 4 == 0);
         }
         
         {
-            LinearAllocator<16> allocator(1024);
+            LinearAllocator allocator(1024, 16);
             auto* p = Alloc::New<Data128B>(&allocator);
             CHECK(reinterpret_cast<size_t>(p) % 16 == 0);
         }
@@ -284,7 +284,7 @@ TEST_CASE("LinearAllocator - Edge Cases")
 {
     SUBCASE("Very small allocator")
     {
-        LinearAllocator<4> allocator(32);
+        LinearAllocator allocator(32, 8);
         
         auto* p1 = Alloc::New<uint32_t>(&allocator);
         CHECK(p1 != nullptr);
@@ -295,7 +295,7 @@ TEST_CASE("LinearAllocator - Edge Cases")
     
     SUBCASE("Delete without reset")
     {
-        LinearAllocator<8> allocator(1024);
+        LinearAllocator allocator(1024, 8);
         
         auto* p1 = Alloc::New<Data64B>(&allocator);
         size_t before = allocator.GetAvailableSpaceSize();
@@ -308,7 +308,7 @@ TEST_CASE("LinearAllocator - Edge Cases")
     
     SUBCASE("Pointer stability before reset")
     {
-        LinearAllocator<8> allocator(2048);
+        LinearAllocator allocator(2048, 8);
         
         auto* p1 = Alloc::New<uint32_t>(&allocator);
         auto* p2 = Alloc::New<uint32_t>(&allocator);
