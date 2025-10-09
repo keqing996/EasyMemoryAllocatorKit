@@ -8,53 +8,7 @@
 
 namespace EAllocKit
 {
-    /**
-     * @brief TLSF Allocator (Two-Level Segregated Fit Allocator)
-     * 
-     * @section strategy Allocation Strategy
-     * - Uses a two-level segregation structure with first-level (FLI) and second-level (SLI) indices
-     * - First level divides blocks by power-of-two size classes
-     * - Second level subdivides each first-level class into linear subdivisions
-     * - Uses bitmaps for O(1) free block lookup
-     * - Supports block splitting and coalescing for optimal memory utilization
-     * 
-     * @section advantages Advantages
-     * - Bounded O(1) time complexity: All operations complete in constant time
-     * - Low fragmentation: Sophisticated segregation minimizes external fragmentation
-     * - Real-time capable: Deterministic performance suitable for real-time systems
-     * - Good memory utilization: Smart coalescing reduces memory waste
-     * - Fast best-fit: Efficiently finds smallest suitable block
-     * - Industry proven: Used in embedded systems, aerospace, and real-time applications
-     * - Flexible: Supports arbitrary sizes and alignments
-     * 
-     * @section disadvantages Disadvantages
-     * - Complex implementation: More intricate than simpler allocators
-     * - Higher metadata overhead: Requires block headers and segregated lists
-     * - Memory overhead: Bitmap and free list array structures
-     * - Minimum block size: Small allocations may waste space
-     * - Setup cost: Initial configuration of size classes
-     * - Requires tuning: FLI/SLI parameters need adjustment for optimal performance
-     * 
-     * @section use_cases Recommended Use Cases
-     * - Real-time systems requiring deterministic memory allocation (avionics, automotive)
-     * - Game engines needing predictable performance without GC pauses
-     * - Embedded systems with hard real-time constraints
-     * - Audio/video processing with strict timing requirements
-     * - Mixed-size allocations with good performance requirements
-     * - General-purpose allocator replacement in performance-critical applications
-     * - Systems requiring both speed and low fragmentation
-     * 
-     * @section not_recommended Not Recommended For
-     * - Extremely memory-constrained systems (due to metadata overhead)
-     * - Scenarios dominated by fixed-size allocations (use PoolAllocator)
-     * - Simple applications where standard allocator suffices
-     * - When implementation simplicity is paramount
-     * - Very small total memory pools (overhead becomes significant)
-     * 
-     * @note Current implementation is single-threaded; external synchronization required for multi-threading
-     * @note TLSF is particularly well-suited as a general-purpose allocator replacement
-     */
-    template <size_t DefaultAlignment = 8, size_t FLI = 25, size_t SLI = 4>
+    template <size_t FLI = 25, size_t SLI = 4>
     class TLSFAllocator
     {
     private:
@@ -120,7 +74,7 @@ namespace EAllocKit
         using BitmapType = typename std::conditional<(FLI <= 32), uint32_t, uint64_t>::type;
         
     public:
-        explicit TLSFAllocator(size_t size);
+        explicit TLSFAllocator(size_t size, size_t defaultAlignment = 8);
         ~TLSFAllocator();
         
         TLSFAllocator(const TLSFAllocator& rhs) = delete;
@@ -161,17 +115,17 @@ namespace EAllocKit
     private:
         void* _pData;                                    // Memory pool
         size_t _size;                                    // Total size
+        size_t _defaultAlignment;                        // Default alignment
         BitmapType _flBitmap;                            // First level bitmap
         BitmapType _slBitmap[FLI];                       // Second level bitmaps
         BlockHeader* _blocks[FLI][SLI_COUNT];            // Segregated free lists
     };
     
-    // Implementation
-    
-    template<size_t DefaultAlignment, size_t FLI, size_t SLI>
-    TLSFAllocator<DefaultAlignment, FLI, SLI>::TLSFAllocator(size_t size)
+    template<size_t FLI, size_t SLI>
+    TLSFAllocator<FLI, SLI>::TLSFAllocator(size_t size, size_t defaultAlignment)
         : _pData(nullptr)
         , _size(size)
+        , _defaultAlignment(defaultAlignment)
         , _flBitmap(0)
     {
         // Initialize bitmaps and block lists
@@ -200,8 +154,8 @@ namespace EAllocKit
         InsertBlock(firstBlock, fli, sli);
     }
     
-    template<size_t DefaultAlignment, size_t FLI, size_t SLI>
-    TLSFAllocator<DefaultAlignment, FLI, SLI>::~TLSFAllocator()
+    template<size_t FLI, size_t SLI>
+    TLSFAllocator<FLI, SLI>::~TLSFAllocator()
     {
         if (_pData)
         {
@@ -210,14 +164,14 @@ namespace EAllocKit
         }
     }
     
-    template<size_t DefaultAlignment, size_t FLI, size_t SLI>
-    void* TLSFAllocator<DefaultAlignment, FLI, SLI>::Allocate(size_t size)
+    template<size_t FLI, size_t SLI>
+    void* TLSFAllocator<FLI, SLI>::Allocate(size_t size)
     {
-        return Allocate(size, DefaultAlignment);
+        return Allocate(size, _defaultAlignment);
     }
     
-    template<size_t DefaultAlignment, size_t FLI, size_t SLI>
-    void* TLSFAllocator<DefaultAlignment, FLI, SLI>::Allocate(size_t size, size_t alignment)
+    template<size_t FLI, size_t SLI>
+    void* TLSFAllocator<FLI, SLI>::Allocate(size_t size, size_t alignment)
     {
         if (size == 0)
             return nullptr;
@@ -254,8 +208,8 @@ namespace EAllocKit
         return block->GetDataPtr();
     }
     
-    template<size_t DefaultAlignment, size_t FLI, size_t SLI>
-    void TLSFAllocator<DefaultAlignment, FLI, SLI>::Deallocate(void* ptr)
+    template<size_t FLI, size_t SLI>
+    void TLSFAllocator<FLI, SLI>::Deallocate(void* ptr)
     {
         if (!ptr)
             return;
@@ -285,8 +239,8 @@ namespace EAllocKit
         InsertBlock(block, fli, sli);
     }
     
-    template<size_t DefaultAlignment, size_t FLI, size_t SLI>
-    void TLSFAllocator<DefaultAlignment, FLI, SLI>::MappingInsert(size_t size, int* fli, int* sli)
+    template<size_t FLI, size_t SLI>
+    void TLSFAllocator<FLI, SLI>::MappingInsert(size_t size, int* fli, int* sli)
     {
         if (size < SMALL_BLOCK_SIZE)
         {
@@ -344,8 +298,8 @@ namespace EAllocKit
         }
     }
     
-    template<size_t DefaultAlignment, size_t FLI, size_t SLI>
-    void TLSFAllocator<DefaultAlignment, FLI, SLI>::MappingSearch(size_t size, int* fli, int* sli)
+    template<size_t FLI, size_t SLI>
+    void TLSFAllocator<FLI, SLI>::MappingSearch(size_t size, int* fli, int* sli)
     {
         // Round up to next size class for search
         MappingInsert(size, fli, sli);
@@ -369,8 +323,8 @@ namespace EAllocKit
         }
     }
     
-    template<size_t DefaultAlignment, size_t FLI, size_t SLI>
-    int TLSFAllocator<DefaultAlignment, FLI, SLI>::FindFirstSet(BitmapType bitmap) const
+    template<size_t FLI, size_t SLI>
+    int TLSFAllocator<FLI, SLI>::FindFirstSet(BitmapType bitmap) const
     {
         if (bitmap == 0)
             return -1;
@@ -390,9 +344,9 @@ namespace EAllocKit
         return position;
     }
     
-    template<size_t DefaultAlignment, size_t FLI, size_t SLI>
-    typename TLSFAllocator<DefaultAlignment, FLI, SLI>::BlockHeader* 
-    TLSFAllocator<DefaultAlignment, FLI, SLI>::FindSuitableBlock(int* fli, int* sli)
+    template<size_t FLI, size_t SLI>
+    typename TLSFAllocator<FLI, SLI>::BlockHeader* 
+    TLSFAllocator<FLI, SLI>::FindSuitableBlock(int* fli, int* sli)
     {
         // Validate indices
         if (*fli < 0 || *fli >= static_cast<int>(FLI) || *sli < 0 || *sli >= static_cast<int>(SLI_COUNT))
@@ -422,8 +376,8 @@ namespace EAllocKit
         return _blocks[*fli][*sli];
     }
     
-    template<size_t DefaultAlignment, size_t FLI, size_t SLI>
-    void TLSFAllocator<DefaultAlignment, FLI, SLI>::RemoveBlock(BlockHeader* block, int fli, int sli)
+    template<size_t FLI, size_t SLI>
+    void TLSFAllocator<FLI, SLI>::RemoveBlock(BlockHeader* block, int fli, int sli)
     {
         // Validate indices
         if (fli < 0 || fli >= static_cast<int>(FLI) || sli < 0 || sli >= static_cast<int>(SLI_COUNT))
@@ -455,8 +409,8 @@ namespace EAllocKit
         block->prevFree = nullptr;
     }
     
-    template<size_t DefaultAlignment, size_t FLI, size_t SLI>
-    void TLSFAllocator<DefaultAlignment, FLI, SLI>::InsertBlock(BlockHeader* block, int fli, int sli)
+    template<size_t FLI, size_t SLI>
+    void TLSFAllocator<FLI, SLI>::InsertBlock(BlockHeader* block, int fli, int sli)
     {
         // Validate indices
         if (fli < 0 || fli >= static_cast<int>(FLI) || sli < 0 || sli >= static_cast<int>(SLI_COUNT))
@@ -477,9 +431,9 @@ namespace EAllocKit
         SetBit(_slBitmap[fli], sli);
     }
     
-    template<size_t DefaultAlignment, size_t FLI, size_t SLI>
-    typename TLSFAllocator<DefaultAlignment, FLI, SLI>::BlockHeader* 
-    TLSFAllocator<DefaultAlignment, FLI, SLI>::SplitBlock(BlockHeader* block, size_t size)
+    template<size_t FLI, size_t SLI>
+    typename TLSFAllocator<FLI, SLI>::BlockHeader* 
+    TLSFAllocator<FLI, SLI>::SplitBlock(BlockHeader* block, size_t size)
     {
         BlockHeader* remainder = reinterpret_cast<BlockHeader*>(
             reinterpret_cast<uint8_t*>(block) + sizeof(BlockHeader) + size
@@ -507,9 +461,9 @@ namespace EAllocKit
         return remainder;
     }
     
-    template<size_t DefaultAlignment, size_t FLI, size_t SLI>
-    typename TLSFAllocator<DefaultAlignment, FLI, SLI>::BlockHeader* 
-    TLSFAllocator<DefaultAlignment, FLI, SLI>::CoalesceWithPrev(BlockHeader* block)
+    template<size_t FLI, size_t SLI>
+    typename TLSFAllocator<FLI, SLI>::BlockHeader* 
+    TLSFAllocator<FLI, SLI>::CoalesceWithPrev(BlockHeader* block)
     {
         BlockHeader* prevBlock = block->prevPhysical;
         
@@ -532,9 +486,9 @@ namespace EAllocKit
         return prevBlock;
     }
     
-    template<size_t DefaultAlignment, size_t FLI, size_t SLI>
-    typename TLSFAllocator<DefaultAlignment, FLI, SLI>::BlockHeader* 
-    TLSFAllocator<DefaultAlignment, FLI, SLI>::CoalesceWithNext(BlockHeader* block)
+    template<size_t FLI, size_t SLI>
+    typename TLSFAllocator<FLI, SLI>::BlockHeader* 
+    TLSFAllocator<FLI, SLI>::CoalesceWithNext(BlockHeader* block)
     {
         BlockHeader* nextBlock = block->GetNextPhysical();
         
@@ -560,8 +514,8 @@ namespace EAllocKit
         return block;
     }
     
-    template<size_t DefaultAlignment, size_t FLI, size_t SLI>
-    void TLSFAllocator<DefaultAlignment, FLI, SLI>::MarkBlockUsed(BlockHeader* block)
+    template<size_t FLI, size_t SLI>
+    void TLSFAllocator<FLI, SLI>::MarkBlockUsed(BlockHeader* block)
     {
         block->SetFree(false);
         
@@ -571,8 +525,8 @@ namespace EAllocKit
             nextBlock->SetPrevFree(false);
     }
     
-    template<size_t DefaultAlignment, size_t FLI, size_t SLI>
-    void TLSFAllocator<DefaultAlignment, FLI, SLI>::MarkBlockFree(BlockHeader* block)
+    template<size_t FLI, size_t SLI>
+    void TLSFAllocator<FLI, SLI>::MarkBlockFree(BlockHeader* block)
     {
         block->SetFree(true);
         
@@ -582,15 +536,15 @@ namespace EAllocKit
             nextBlock->SetPrevFree(true);
     }
     
-    template<size_t DefaultAlignment, size_t FLI, size_t SLI>
-    size_t TLSFAllocator<DefaultAlignment, FLI, SLI>::AdjustRequestSize(size_t size, size_t alignment)
+    template<size_t FLI, size_t SLI>
+    size_t TLSFAllocator<FLI, SLI>::AdjustRequestSize(size_t size, size_t alignment)
     {
         // Align the size to the requested alignment
         size_t adjustedSize = MemoryAllocatorUtil::UpAlignment(size, alignment);
         
-        // Also align to DefaultAlignment at minimum
-        if (alignment < DefaultAlignment)
-            adjustedSize = MemoryAllocatorUtil::UpAlignment(size, DefaultAlignment);
+        // Also align to _defaultAlignment at minimum
+        if (alignment < _defaultAlignment)
+            adjustedSize = MemoryAllocatorUtil::UpAlignment(size, _defaultAlignment);
         
         // Ensure minimum block size
         if (adjustedSize < MIN_BLOCK_SIZE)
@@ -599,8 +553,8 @@ namespace EAllocKit
         return adjustedSize;
     }
     
-    template<size_t DefaultAlignment, size_t FLI, size_t SLI>
-    bool TLSFAllocator<DefaultAlignment, FLI, SLI>::IsAligned(void* ptr, size_t alignment) const
+    template<size_t FLI, size_t SLI>
+    bool TLSFAllocator<FLI, SLI>::IsAligned(void* ptr, size_t alignment) const
     {
         return (reinterpret_cast<size_t>(ptr) & (alignment - 1)) == 0;
     }
