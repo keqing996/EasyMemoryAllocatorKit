@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <stdexcept>
 #include "Util/Util.hpp"
 
 namespace EAllocKit
@@ -59,12 +60,18 @@ namespace EAllocKit
         , _defaultAlignment(defaultAlignment)
         , _pStackTop(nullptr)
     {
+        if (!Util::IsPowerOfTwo(defaultAlignment))
+            throw std::invalid_argument("StackAllocator defaultAlignment must be a power of 2");
+            
         // Minimum size should accommodate at least one allocation (header + distance + some data)
         size_t minSize = sizeof(StackFrameHeader) + 4 + _defaultAlignment; // header + distance + alignment padding
         if (_size < minSize)
             _size = minSize;
 
         _pData = static_cast<uint8_t*>(::malloc(_size));
+        if (!_pData)
+            throw std::bad_alloc();
+            
         _pStackTop = nullptr;  // Empty stack
     }
 
@@ -81,6 +88,9 @@ namespace EAllocKit
 
     inline void* StackAllocator::Allocate(size_t size, size_t alignment)
     {
+        if (!Util::IsPowerOfTwo(alignment))
+            throw std::invalid_argument("StackAllocator only supports power-of-2 alignments");
+            
         size_t headerSize = sizeof(StackFrameHeader);
         size_t requiredUserSize = size;
         

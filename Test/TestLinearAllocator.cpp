@@ -1,6 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
 #include <new>
+#include <vector>
+#include <stdexcept>
 #include "EAllocKit/LinearAllocator.hpp"
 #include "Helper.h"
 
@@ -10,49 +12,44 @@ template<typename T, size_t alignment, size_t blockSize>
 void AllocateAndDelete(size_t* alreadyAllocateSize, LinearAllocator* pAllocator)
 {
     size_t availableSize = pAllocator->GetAvailableSpaceSize();
+    void* pMemBlock = pAllocator->GetMemoryBlockPtr();
+    void* pCurrentBefore = pAllocator->GetCurrentPtr();
 
     T* ptr = Alloc::New<T>(pAllocator);
 
     size_t leftAvailableSize = pAllocator->GetAvailableSpaceSize();
+    void* pCurrentAfter = pAllocator->GetCurrentPtr();
 
-    size_t allocationSize = Util::UpAlignment<sizeof(T), alignment>();
-    void* pMemBlock = pAllocator->GetMemoryBlockPtr();
-    void* pCurrent = pAllocator->GetCurrentPtr();
-
-    if (*alreadyAllocateSize + allocationSize > blockSize)
+    // Calculate actual allocation size used (includes alignment padding)
+    size_t actualAllocSize = reinterpret_cast<size_t>(pCurrentAfter) - reinterpret_cast<size_t>(pCurrentBefore);
+    
+    if (ptr == nullptr)
     {
-        std::cout << std::format("Allocation failed, pMem = 0x{:x}, pCur = 0x{:x}, need = {}, available = {}, left = {}"
-            , ToAddr(pMemBlock), ToAddr(pCurrent), allocationSize, availableSize, leftAvailableSize) << std::endl;
-        CHECK(ptr == nullptr);
+        CHECK(availableSize < sizeof(T)); // Should fail when not enough space
     }
     else
     {
-        *alreadyAllocateSize += allocationSize;
+        *alreadyAllocateSize += actualAllocSize;
 
-        std::cout << std::format("Allocation success, pMem = 0x{:x}, pCur = 0x{:x}, need = {}, available = {}, left = {}"
-            , ToAddr(pMemBlock), ToAddr(pCurrent), allocationSize, availableSize, leftAvailableSize) << std::endl;
-
-        CHECK(ToAddr(pCurrent) == ToAddr(pMemBlock) + *alreadyAllocateSize);
+        CHECK(ToAddr(pCurrentAfter) == ToAddr(pMemBlock) + *alreadyAllocateSize);
+        CHECK(reinterpret_cast<size_t>(ptr) % alignment == 0); // Check alignment
 
         Alloc::Delete(pAllocator, ptr);
 
-        CHECK(ToAddr(pCurrent) == ToAddr(pMemBlock) + *alreadyAllocateSize);
+        // LinearAllocator doesn't actually free memory on Delete
+        CHECK(ToAddr(pCurrentAfter) == ToAddr(pMemBlock) + *alreadyAllocateSize);
     }
 }
 
 template <size_t alignment, size_t blockSize>
 void TestAllocation()
 {
-    std::cout << "======== Test Allocation ========" << std::endl;
-    std::cout << std::format("Alignment = {}, Block Size = {}", alignment, blockSize) << std::endl;
-
     LinearAllocator allocator(blockSize, alignment);
 
     void* pMemBlock = allocator.GetMemoryBlockPtr();
     void* pCurrent = allocator.GetCurrentPtr();
     size_t alreadyAllocateSize = 0;
 
-    std::cout << std::format("Allocator block start addr: 0x{:x}", ToAddr(pMemBlock)) << std::endl;
     CHECK(pMemBlock != nullptr);
     CHECK(pMemBlock == pCurrent);
 
@@ -321,5 +318,26 @@ TEST_CASE("LinearAllocator - Edge Cases")
         
         // After reset, pointers become invalid
         allocator.Reset();
+    }
+}
+
+TEST_CASE("LinearAllocator - Non-power-of-2 Alignment Exception")
+{
+    LinearAllocator allocator(1024, 4);
+    
+    // Test that non-power-of-2 alignments throw exceptions
+    std::vector<size_t> badAlignments = {3, 6, 12, 24, 48, 96};
+    
+    for (size_t alignment : badAlignments) {
+        CHECK_THROWS_AS(allocator.Allocate(32, alignment), std::invalid_argument);
+    }
+    
+    // Test that power-of-2 alignments still work
+    std::vector<size_t> goodAlignments = {1, 2, 4, 8, 16, 32, 64};
+    
+    for (size_t alignment : goodAlignments) {
+        void* p = allocator.Allocate(16, alignment);
+        CHECK(p != nullptr);
+        CHECK(reinterpret_cast<size_t>(p) % alignment == 0);
     }
 }

@@ -1,7 +1,9 @@
 #pragma once
 
 #include <cstdint>
+#include <stdexcept>
 #include "LinearAllocator.hpp"
+#include "Util/Util.hpp"
 
 namespace EAllocKit
 {
@@ -38,6 +40,8 @@ namespace EAllocKit
         , _peakUsage(0)
         , _allocationCount(0)
     {
+        if (!Util::IsPowerOfTwo(defaultAlignment))
+            throw std::invalid_argument("FrameAllocator defaultAlignment must be a power of 2");
     }
     
     inline void* FrameAllocator::Allocate(size_t size)

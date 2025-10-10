@@ -47,6 +47,11 @@ namespace EAllocKit
             return reinterpret_cast<size_t>(p);
         }
         
+        static bool IsPowerOfTwo(size_t value)
+        {
+            return value > 0 && (value & (value - 1)) == 0;
+        }
+        
         static size_t UpAlignment(size_t size, size_t alignment)
         {
             return (size + alignment - 1) & ~(alignment - 1);

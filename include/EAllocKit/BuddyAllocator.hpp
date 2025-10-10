@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstring>
 #include <new>
+#include <stdexcept>
 #include "EAllocKit/Util/Util.hpp"
 
 namespace EAllocKit
@@ -64,6 +65,9 @@ namespace EAllocKit
         , _blockStatus(nullptr)
         , _bitmapSize(0)
     {
+        if (!Util::IsPowerOfTwo(defaultAlignment))
+            throw std::invalid_argument("BuddyAllocator defaultAlignment must be a power of 2");
+            
         // Round size down to power of 2
         _size = Util::RoundUpToPowerOf2(size);
         if (_size < MIN_BLOCK_SIZE)
@@ -112,6 +116,9 @@ namespace EAllocKit
     {
         if (size == 0)
             return nullptr;
+            
+        if (!Util::IsPowerOfTwo(alignment))
+            throw std::invalid_argument("BuddyAllocator only supports power-of-2 alignments");
         
         // Buddy allocator doesn't support arbitrary alignment efficiently
         size_t adjustedSize = size;

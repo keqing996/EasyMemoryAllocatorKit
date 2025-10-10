@@ -2,6 +2,7 @@
 #include "doctest/doctest.h"
 #include <vector>
 #include <array>
+#include <stdexcept>
 #include "EAllocKit/StackAllocator.hpp"
 #include "Helper.h"
 
@@ -916,6 +917,28 @@ TEST_CASE("StackAllocator - Comprehensive Integration Tests")
         
         allocator.Deallocate();
         allocator.Deallocate();
+        allocator.Deallocate();
+    }
+}
+
+TEST_CASE("StackAllocator - Non-power-of-2 Alignment Exception")
+{
+    StackAllocator allocator(1024, 4);
+    
+    // Test that non-power-of-2 alignments throw exceptions
+    std::vector<size_t> badAlignments = {3, 6, 12, 24, 48, 96};
+    
+    for (size_t alignment : badAlignments) {
+        CHECK_THROWS_AS(allocator.Allocate(32, alignment), std::invalid_argument);
+    }
+    
+    // Test that power-of-2 alignments still work
+    std::vector<size_t> goodAlignments = {1, 2, 4, 8, 16, 32, 64};
+    
+    for (size_t alignment : goodAlignments) {
+        void* p = allocator.Allocate(16, alignment);
+        CHECK(p != nullptr);
+        CHECK(reinterpret_cast<size_t>(p) % alignment == 0);
         allocator.Deallocate();
     }
 }

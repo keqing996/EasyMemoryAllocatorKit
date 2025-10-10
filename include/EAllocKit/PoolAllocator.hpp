@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <stdexcept>
 #include "Util/Util.hpp"
 
 namespace EAllocKit
@@ -38,6 +39,9 @@ namespace EAllocKit
         , _blockNum(blockNum)
         , _defaultAlignment(defaultAlignment)
     {
+        if (!Util::IsPowerOfTwo(defaultAlignment))
+            throw std::invalid_argument("PoolAllocator defaultAlignment must be a power of 2");
+            
         // Ensure Node size is aligned to maintain user data alignment
         size_t alignedNodeSize = Util::UpAlignment(sizeof(Node), _defaultAlignment);
         size_t blockRequiredSize = alignedNodeSize + blockSize;

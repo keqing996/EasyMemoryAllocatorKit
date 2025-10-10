@@ -4,6 +4,7 @@
 #include <cstring>
 #include <type_traits>
 #include <new>
+#include <stdexcept>
 #include "Util/Util.hpp"
 
 namespace EAllocKit
@@ -128,6 +129,9 @@ namespace EAllocKit
         , _defaultAlignment(defaultAlignment)
         , _flBitmap(0)
     {
+        if (!Util::IsPowerOfTwo(defaultAlignment))
+            throw std::invalid_argument("TLSFAllocator defaultAlignment must be a power of 2");
+            
         // Initialize bitmaps and block lists
         std::memset(_slBitmap, 0, sizeof(_slBitmap));
         std::memset(_blocks, 0, sizeof(_blocks));
@@ -175,6 +179,9 @@ namespace EAllocKit
     {
         if (size == 0)
             return nullptr;
+            
+        if (!Util::IsPowerOfTwo(alignment))
+            throw std::invalid_argument("TLSFAllocator only supports power-of-2 alignments");
         
         // Adjust size for alignment and minimum requirements
         size_t adjustedSize = AdjustRequestSize(size, alignment);
