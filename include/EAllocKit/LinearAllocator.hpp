@@ -54,14 +54,20 @@ namespace EAllocKit
 
     inline void* LinearAllocator::Allocate(size_t size, size_t alignment)
     {
-        size_t requiredSize = MemoryAllocatorUtil::UpAlignment(size, alignment);
-        size_t available = GetAvailableSpaceSize();
-
-        if (available < requiredSize)
+        // Align current pointer to required alignment
+        size_t currentAddr = reinterpret_cast<size_t>(_pCurrent);
+        size_t alignedAddr = Util::UpAlignment(currentAddr, alignment);
+        
+        // Calculate space needed: alignment padding + actual size
+        size_t paddingBytes = alignedAddr - currentAddr;
+        size_t totalRequired = paddingBytes + size;
+        
+        if (GetAvailableSpaceSize() < totalRequired)
             return nullptr;
 
-        void* result = _pCurrent;
-        _pCurrent = MemoryAllocatorUtil::PtrOffsetBytes(_pCurrent, requiredSize);
+        // Update current pointer to point after the allocated block
+        void* result = reinterpret_cast<void*>(alignedAddr);
+        _pCurrent = Util::PtrOffsetBytes(result, size);
         return result;
     }
 

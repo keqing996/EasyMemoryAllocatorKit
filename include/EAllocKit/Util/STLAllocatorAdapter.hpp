@@ -8,6 +8,7 @@
 namespace EAllocKit
 {
     class PoolAllocator;
+    class StackAllocator;
     class ArenaAllocator;
 
     // Trait to detect if an allocator is a PoolAllocator
@@ -99,8 +100,13 @@ namespace EAllocKit
         // Deallocate memory
         void deallocate(pointer p, size_type n) noexcept
         {
-            if (p)
-                _pAllocator->Deallocate(p);
+            if (p) {
+                if constexpr (std::is_same_v<Allocator, StackAllocator>) {
+                    _pAllocator->Deallocate();  // StackAllocator deallocates without parameter
+                } else {
+                    _pAllocator->Deallocate(p);
+                }
+            }
         }
 
         // Maximum number of elements that can be allocated

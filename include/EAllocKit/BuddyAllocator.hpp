@@ -65,12 +65,12 @@ namespace EAllocKit
         , _bitmapSize(0)
     {
         // Round size down to power of 2
-        _size = MemoryAllocatorUtil::RoundUpToPowerOf2(size);
+        _size = Util::RoundUpToPowerOf2(size);
         if (_size < MIN_BLOCK_SIZE)
             _size = MIN_BLOCK_SIZE;
         
         // Calculate max order
-        _maxOrder = MemoryAllocatorUtil::Log2(_size / MIN_BLOCK_SIZE) + 1;
+        _maxOrder = Util::Log2(_size / MIN_BLOCK_SIZE) + 1;
         if (_maxOrder > MAX_ORDER)
             _maxOrder = MAX_ORDER;
         
@@ -119,7 +119,7 @@ namespace EAllocKit
             adjustedSize = size + alignment;
         
         // Round up to power of 2, with minimum size
-        size_t blockSize = MemoryAllocatorUtil::RoundUpToPowerOf2(adjustedSize);
+        size_t blockSize = Util::RoundUpToPowerOf2(adjustedSize);
         if (blockSize < MIN_BLOCK_SIZE)
             blockSize = MIN_BLOCK_SIZE;
         
@@ -175,7 +175,7 @@ namespace EAllocKit
     
     inline size_t BuddyAllocator::GetOrderFromSize(size_t size) const
     {
-        return MemoryAllocatorUtil::Log2(size / MIN_BLOCK_SIZE);
+        return Util::Log2(size / MIN_BLOCK_SIZE);
     }
     
     inline size_t BuddyAllocator::GetSizeFromOrder(size_t order) const

@@ -39,10 +39,10 @@ namespace EAllocKit
         , _defaultAlignment(defaultAlignment)
     {
         // Ensure Node size is aligned to maintain user data alignment
-        size_t alignedNodeSize = MemoryAllocatorUtil::UpAlignment(sizeof(Node), _defaultAlignment);
+        size_t alignedNodeSize = Util::UpAlignment(sizeof(Node), _defaultAlignment);
         size_t blockRequiredSize = alignedNodeSize + blockSize;
         // Align total block size to ensure next block starts at aligned address
-        blockRequiredSize = MemoryAllocatorUtil::UpAlignment(blockRequiredSize, _defaultAlignment);
+        blockRequiredSize = Util::UpAlignment(blockRequiredSize, _defaultAlignment);
         size_t needSize = blockRequiredSize * blockNum;
 
         _pData = ::malloc(needSize);
@@ -50,12 +50,12 @@ namespace EAllocKit
         _pFreeBlockList = static_cast<Node*>(_pData);
         for (size_t i = 0; i < blockNum; i++)
         {
-            Node* pBlockNode = static_cast<Node*>(MemoryAllocatorUtil::PtrOffsetBytes(_pData, i * blockRequiredSize));
+            Node* pBlockNode = static_cast<Node*>(Util::PtrOffsetBytes(_pData, i * blockRequiredSize));
             if (i == blockNum - 1)
                 pBlockNode->pNext = nullptr;
             else
             {
-                Node* pNextBlockNode = static_cast<Node*>(MemoryAllocatorUtil::PtrOffsetBytes(_pData, (i + 1) * blockRequiredSize));
+                Node* pNextBlockNode = static_cast<Node*>(Util::PtrOffsetBytes(_pData, (i + 1) * blockRequiredSize));
                 pBlockNode->pNext = pNextBlockNode;
             }
         }
@@ -76,15 +76,15 @@ namespace EAllocKit
         _pFreeBlockList = _pFreeBlockList->pNext;
         
         // User data starts after aligned Node header
-        size_t alignedNodeSize = MemoryAllocatorUtil::UpAlignment(sizeof(Node), _defaultAlignment);
-        return MemoryAllocatorUtil::PtrOffsetBytes(pResult, alignedNodeSize);
+        size_t alignedNodeSize = Util::UpAlignment(sizeof(Node), _defaultAlignment);
+        return Util::PtrOffsetBytes(pResult, alignedNodeSize);
     }
 
     inline void PoolAllocator::Deallocate(void* p)
     {
         // Node header is before user data, at aligned offset
-        size_t alignedNodeSize = MemoryAllocatorUtil::UpAlignment(sizeof(Node), _defaultAlignment);
-        Node* pNode = static_cast<Node*>(MemoryAllocatorUtil::PtrOffsetBytes(p, -static_cast<ptrdiff_t>(alignedNodeSize)));
+        size_t alignedNodeSize = Util::UpAlignment(sizeof(Node), _defaultAlignment);
+        Node* pNode = static_cast<Node*>(Util::PtrOffsetBytes(p, -static_cast<ptrdiff_t>(alignedNodeSize)));
         pNode->pNext = _pFreeBlockList;
         _pFreeBlockList = pNode;
     }

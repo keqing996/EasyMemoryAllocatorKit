@@ -540,11 +540,11 @@ namespace EAllocKit
     size_t TLSFAllocator<FLI, SLI>::AdjustRequestSize(size_t size, size_t alignment)
     {
         // Align the size to the requested alignment
-        size_t adjustedSize = MemoryAllocatorUtil::UpAlignment(size, alignment);
+        size_t adjustedSize = Util::UpAlignment(size, alignment);
         
         // Also align to _defaultAlignment at minimum
         if (alignment < _defaultAlignment)
-            adjustedSize = MemoryAllocatorUtil::UpAlignment(size, _defaultAlignment);
+            adjustedSize = Util::UpAlignment(size, _defaultAlignment);
         
         // Ensure minimum block size
         if (adjustedSize < MIN_BLOCK_SIZE)

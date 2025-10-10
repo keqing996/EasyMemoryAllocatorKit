@@ -15,7 +15,7 @@ void AllocateAndDelete(size_t* alreadyAllocateSize, LinearAllocator* pAllocator)
 
     size_t leftAvailableSize = pAllocator->GetAvailableSpaceSize();
 
-    size_t allocationSize = MemoryAllocatorUtil::UpAlignment<sizeof(T), alignment>();
+    size_t allocationSize = Util::UpAlignment<sizeof(T), alignment>();
     void* pMemBlock = pAllocator->GetMemoryBlockPtr();
     void* pCurrent = pAllocator->GetCurrentPtr();
 

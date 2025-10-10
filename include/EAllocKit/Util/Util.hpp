@@ -2,13 +2,14 @@
 
 #include <cstdlib>
 #include <cstddef>
+#include <cstdint>
 
 namespace EAllocKit
 {
-    class MemoryAllocatorUtil
+    class Util
     {
     public:
-        MemoryAllocatorUtil() = delete;
+        Util() = delete;
         
         static constexpr size_t HIGHEST_BIT_MASK = static_cast<size_t>(1) << (sizeof(size_t) * 8 - 1);
         
@@ -92,15 +93,9 @@ namespace EAllocKit
         }
         
         template <typename T>
-        static T* PtrOffsetBytes(T* ptr, size_t offset)
+        static T* PtrOffsetBytes(T* ptr, std::ptrdiff_t offset)
         {
-            return reinterpret_cast<T*>(reinterpret_cast<size_t>(ptr) + offset);
-        }
-        
-        template <typename T>
-        static T* PtrOffsetBytes(T* ptr, ptrdiff_t offset)
-        {
-            return reinterpret_cast<T*>(reinterpret_cast<char*>(ptr) + offset);
+            return reinterpret_cast<T*>(static_cast<uint8_t*>(static_cast<void*>(ptr)) + offset);
         }
     };
 }
