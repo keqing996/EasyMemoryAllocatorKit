@@ -12,6 +12,7 @@
 #include "EAllocKit/FrameAllocator.hpp"
 // Note: SlabAllocator is not included in STL adapter tests because it requires
 // fixed-size objects at compile time, which conflicts with STL container requirements
+// Note: ArenaAllocator is not compatible with STL containers due to explicit arena management
 #include "EAllocKit/Util/STLAllocatorAdapter.hpp"
 
 using namespace EAllocKit;
