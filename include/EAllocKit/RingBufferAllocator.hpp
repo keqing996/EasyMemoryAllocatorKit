@@ -4,6 +4,8 @@
 #include <cstring>
 #include <cstdlib>
 #include <new>
+#include <stdexcept>
+#include "Util/Util.hpp"
 
 namespace EAllocKit
 {
@@ -55,6 +57,9 @@ namespace EAllocKit
         , _readPtr(0)
         , _isFull(false)
     {
+        if (!Util::IsPowerOfTwo(defaultAlignment))
+            throw std::invalid_argument("RingBufferAllocator defaultAlignment must be a power of 2");
+            
         // malloc typically provides alignment for max_align_t (usually 16 bytes)
         _pData = ::malloc(_size);
         if (!_pData)

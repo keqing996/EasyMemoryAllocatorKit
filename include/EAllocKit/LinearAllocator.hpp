@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <new>
+#include <stdexcept>
 #include "Util/Util.hpp"
 
 namespace EAllocKit
@@ -37,6 +38,9 @@ namespace EAllocKit
         , _size(size)
         , _defaultAlignment(defaultAlignment)
     {
+        if (!Util::IsPowerOfTwo(defaultAlignment))
+            throw std::invalid_argument("LinearAllocator defaultAlignment must be a power of 2");
+            
         if (!_pData)
             throw std::bad_alloc();
     }
@@ -54,6 +58,9 @@ namespace EAllocKit
 
     inline void* LinearAllocator::Allocate(size_t size, size_t alignment)
     {
+        if (!Util::IsPowerOfTwo(alignment))
+            throw std::invalid_argument("LinearAllocator only supports power-of-2 alignments");
+            
         // Align current pointer to required alignment
         size_t currentAddr = reinterpret_cast<size_t>(_pCurrent);
         size_t alignedAddr = Util::UpAlignment(currentAddr, alignment);

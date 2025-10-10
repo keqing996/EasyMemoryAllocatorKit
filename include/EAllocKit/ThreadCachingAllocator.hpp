@@ -574,6 +574,9 @@ namespace EAllocKit
     {
         if (size == 0) return nullptr;
         
+        if (!Util::IsPowerOfTwo(alignment))
+            throw std::invalid_argument("ThreadCachingAllocator only supports power-of-2 alignments");
+        
         // Store original size for clearing
         size_t originalSize = size;
         

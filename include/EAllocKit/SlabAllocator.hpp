@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <cstring>
 #include <new>
+#include <stdexcept>
+#include "Util/Util.hpp"
 
 namespace EAllocKit
 {
@@ -63,6 +65,9 @@ namespace EAllocKit
         , _slabCount(0)
         , _allocationCount(0)
     {
+        if (!Util::IsPowerOfTwo(defaultAlignment))
+            throw std::invalid_argument("SlabAllocator defaultAlignment must be a power of 2");
+            
         // Ensure object size is at least sizeof(void*)
         if (_adjustedObjectSize < sizeof(void*))
             _adjustedObjectSize = sizeof(void*);
