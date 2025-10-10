@@ -1,9 +1,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
 
-#include <new>
 #include <vector>
 #include <stdexcept>
+#include <algorithm>
 #include "EAllocKit/FreeListAllocator.hpp"
 #include "Helper.h"
 
@@ -14,7 +14,7 @@ void AllocateAndDelete()
 {
     FreeListAllocator allocator(blockSize, alignment);
 
-    size_t numberToAllocate = std::max(1UL, blockSize / (sizeof(T) + 32)); // Conservative estimate
+    size_t numberToAllocate = std::max(static_cast<size_t>(1), blockSize / (sizeof(T) + 32)); // Conservative estimate
 
     // Allocate
     std::vector<T*> dataVec;

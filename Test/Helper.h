@@ -1,8 +1,10 @@
 #pragma once
 
+#include <cstdint>
 #include <cstddef>
 #include <cstdio>
-#include <format>
+#include <utility>
+#include <new>
 
 #define ToAddr(x) reinterpret_cast<unsigned long long>(x)
 

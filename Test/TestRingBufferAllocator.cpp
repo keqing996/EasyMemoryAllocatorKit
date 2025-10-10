@@ -13,7 +13,7 @@ TEST_CASE("RingBufferAllocator - Basic Allocation")
         void* ptr = allocator.Allocate(100);
         CHECK(ptr != nullptr);
         CHECK(allocator.GetUsedSpace() > 0);
-        CHECK(allocator.GetFreeSpace() < 1024);
+        CHECK(allocator.GetAvailableSpace() < 1024);
     }
 }
 
@@ -98,7 +98,7 @@ TEST_CASE("RingBufferAllocator - Reset")
         allocator.Reset();
         
         CHECK(allocator.GetUsedSpace() == 0);
-        CHECK(allocator.GetFreeSpace() == 1024);
+        CHECK(allocator.GetAvailableSpace() == 1024);
     }
 }
 
@@ -280,7 +280,7 @@ TEST_CASE("RingBufferAllocator - Space Tracking")
         (void)ptr2;
         
         size_t used = allocator.GetUsedSpace();
-        size_t free = allocator.GetFreeSpace();
+        size_t free = allocator.GetAvailableSpace();
         size_t capacity = allocator.GetCapacity();
         
         CHECK(used + free == capacity);
