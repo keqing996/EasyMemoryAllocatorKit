@@ -18,25 +18,25 @@ namespace EAllocKit
     public:
         size_t GetSize() const
         {
-            return _usedAndSize & ~MemoryAllocatorUtil::HIGHEST_BIT_MASK;
+            return _usedAndSize & ~Util::HIGHEST_BIT_MASK;
         }
 
         void SetSize(size_t size)
         {
-            _usedAndSize = (_usedAndSize & MemoryAllocatorUtil::HIGHEST_BIT_MASK) | (size & ~MemoryAllocatorUtil::HIGHEST_BIT_MASK);
+            _usedAndSize = (_usedAndSize & Util::HIGHEST_BIT_MASK) | (size & ~Util::HIGHEST_BIT_MASK);
         }
 
         bool Used() const
         {
-            return (_usedAndSize & MemoryAllocatorUtil::HIGHEST_BIT_MASK) != 0;
+            return (_usedAndSize & Util::HIGHEST_BIT_MASK) != 0;
         }
 
         void SetUsed(bool used)
         {
             if (used)
-                _usedAndSize |= MemoryAllocatorUtil::HIGHEST_BIT_MASK;
+                _usedAndSize |= Util::HIGHEST_BIT_MASK;
             else
-                _usedAndSize &= ~MemoryAllocatorUtil::HIGHEST_BIT_MASK;
+                _usedAndSize &= ~Util::HIGHEST_BIT_MASK;
         }
 
         MemoryAllocatorLinkedNode* GetPrevNode() const
@@ -58,20 +58,20 @@ namespace EAllocKit
         // Get pointer to the next physically adjacent block
         MemoryAllocatorLinkedNode* MoveNext(size_t alignment)
         {
-            return MemoryAllocatorUtil::PtrOffsetBytes(this, GetSize() + PaddedSize(alignment));
+            return Util::PtrOffsetBytes(this, GetSize() + PaddedSize(alignment));
         }
 
         // Get the aligned size of this header structure, his is the actual space the header occupies in memory
         // and the user data starts immediately after this header.
         static size_t PaddedSize(size_t alignment)
         {
-            return MemoryAllocatorUtil::GetPaddedSize(sizeof(MemoryAllocatorLinkedNode), alignment);
+            return Util::GetPaddedSize(sizeof(MemoryAllocatorLinkedNode), alignment);
         }
 
         // Recover the node header from a user data pointer
         static MemoryAllocatorLinkedNode* BackStepToLinkNode(void* ptr, size_t alignment)
         {
-            return static_cast<MemoryAllocatorLinkedNode*>(MemoryAllocatorUtil::PtrOffsetBytes(ptr, -static_cast<ptrdiff_t>(PaddedSize(alignment))));
+            return static_cast<MemoryAllocatorLinkedNode*>(Util::PtrOffsetBytes(ptr, -static_cast<ptrdiff_t>(PaddedSize(alignment))));
         }
 
     private:

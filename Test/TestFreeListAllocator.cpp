@@ -12,7 +12,7 @@ void AllocateAndDelete()
 {
     FreeListAllocator allocator(blockSize, alignment);
 
-    size_t allocationSize = MemoryAllocatorUtil::UpAlignment<sizeof(T), alignment>();
+    size_t allocationSize = Util::UpAlignment<sizeof(T), alignment>();
     size_t headerSize = MemoryAllocatorLinkedNode::PaddedSize(alignment);
     size_t cellSize = allocationSize + headerSize;
 
@@ -300,6 +300,69 @@ TEST_CASE("FreeListAllocator - Alignment Tests")
             auto* p = Alloc::New<Data128B>(&allocator);
             CHECK(p != nullptr);
             CHECK(reinterpret_cast<size_t>(p) % 16 == 0);
+            Alloc::Delete(&allocator, p);
+        }
+        
+        // 16-byte alignment
+        {
+            FreeListAllocator allocator(2048, 16);
+            auto* p = Alloc::New<Data128B>(&allocator);
+            CHECK(p != nullptr);
+            CHECK(reinterpret_cast<size_t>(p) % 16 == 0);
+            Alloc::Delete(&allocator, p);
+        }
+        
+        // 32-byte alignment
+        {
+            FreeListAllocator allocator(2048, 32);
+            auto* p = Alloc::New<Data128B>(&allocator);
+            CHECK(p != nullptr);
+            CHECK(reinterpret_cast<size_t>(p) % 32 == 0);
+            Alloc::Delete(&allocator, p);
+        }
+        
+        // 64-byte alignment
+        {
+            FreeListAllocator allocator(4096, 64);
+            auto* p = Alloc::New<Data128B>(&allocator);
+            CHECK(p != nullptr);
+            CHECK(reinterpret_cast<size_t>(p) % 64 == 0);
+            Alloc::Delete(&allocator, p);
+        }
+        
+        // 1-byte alignment
+        {
+            FreeListAllocator allocator(1024, 1);
+            auto* p = Alloc::New<uint8_t>(&allocator);
+            CHECK(p != nullptr);
+            CHECK(reinterpret_cast<size_t>(p) % 1 == 0);
+            Alloc::Delete(&allocator, p);
+        }
+        
+        // 2-byte alignment
+        {
+            FreeListAllocator allocator(1024, 2);
+            auto* p = Alloc::New<uint16_t>(&allocator);
+            CHECK(p != nullptr);
+            CHECK(reinterpret_cast<size_t>(p) % 2 == 0);
+            Alloc::Delete(&allocator, p);
+        }
+        
+        // 128-byte alignment (cache line)
+        {
+            FreeListAllocator allocator(8192, 128);
+            auto* p = Alloc::New<Data128B>(&allocator);
+            CHECK(p != nullptr);
+            CHECK(reinterpret_cast<size_t>(p) % 128 == 0);
+            Alloc::Delete(&allocator, p);
+        }
+        
+        // 256-byte alignment
+        {
+            FreeListAllocator allocator(16384, 256);
+            auto* p = Alloc::New<Data128B>(&allocator);
+            CHECK(p != nullptr);
+            CHECK(reinterpret_cast<size_t>(p) % 256 == 0);
             Alloc::Delete(&allocator, p);
         }
     }

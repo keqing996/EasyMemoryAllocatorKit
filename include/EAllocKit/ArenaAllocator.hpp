@@ -281,7 +281,7 @@ namespace EAllocKit
             return false;
             
         void* start = arena->allocator->GetMemoryBlockPtr();
-        void* end = MemoryAllocatorUtil::PtrOffsetBytes(start, arena->size);
+        void* end = Util::PtrOffsetBytes(start, arena->size);
         return ptr >= start && ptr < end;
     }
     
@@ -360,6 +360,6 @@ namespace EAllocKit
     
     inline size_t ArenaAllocator::GetAlignedSize(size_t size, size_t alignment) const
     {
-        return MemoryAllocatorUtil::UpAlignment(size, alignment);
+        return Util::UpAlignment(size, alignment);
     }
 }
