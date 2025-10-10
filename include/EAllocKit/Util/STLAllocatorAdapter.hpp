@@ -8,6 +8,7 @@
 namespace EAllocKit
 {
     class PoolAllocator;
+    class ArenaAllocator;
 
     // Trait to detect if an allocator is a PoolAllocator
     // -> Because PoolAllocator has different interface (Allocate() without size)
@@ -16,6 +17,13 @@ namespace EAllocKit
 
     template <>
     struct IsPoolAllocator<PoolAllocator> : std::true_type {};
+    
+    // Trait to detect ArenaAllocator - not supported by STLAllocatorAdapter
+    template <typename Allocator>
+    struct IsArenaAllocator : std::false_type {};
+    
+    template <>
+    struct IsArenaAllocator<ArenaAllocator> : std::true_type {};
 
     template <typename T, typename Allocator>
     class STLAllocatorAdapter
@@ -41,6 +49,11 @@ namespace EAllocKit
         explicit STLAllocatorAdapter(Allocator* allocator) noexcept
             : _pAllocator(allocator)
         {
+            // Static assertion to prevent ArenaAllocator usage with STL containers
+            static_assert(!IsArenaAllocator<Allocator>::value, 
+                "ArenaAllocator is not compatible with STLAllocatorAdapter. "
+                "ArenaAllocator requires explicit arena management via ArenaHandle. "
+                "Use ArenaAllocator::AllocateFromArena() directly instead.");
         }
 
         template <typename U>
