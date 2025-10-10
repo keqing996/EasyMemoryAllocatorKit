@@ -14,6 +14,8 @@
 
 // Platform-specific TLS API abstraction
 #ifdef _WIN32
+    
+    #define NOMINMAX
     #include <windows.h>
     
     namespace EAllocKit {
