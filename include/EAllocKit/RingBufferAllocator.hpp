@@ -27,7 +27,7 @@ namespace EAllocKit
     public:
         void* Allocate(size_t size);
         void* Allocate(size_t size, size_t alignment);
-        void Deallocate(void* ptr);  // Validates and consumes from read pointer
+        void DeallocateNext();        // Deallocate the next object in FIFO order
         void Consume(size_t size);    // Explicitly consume bytes
         void Reset();                 // Reset both pointers
         
@@ -144,25 +144,17 @@ namespace EAllocKit
         return userPtr;
     }
     
-    inline void RingBufferAllocator::Deallocate(void* ptr)
+    inline void RingBufferAllocator::DeallocateNext()
     {
-        if (!ptr)
-            return;
+        // Check if there's anything to deallocate
+        if (_readPtr == _writePtr && !_isFull)
+            return;  // Buffer is empty
         
-        // Verify this pointer is at the read position
+        // Get the allocation header at read position
         uint8_t* buffer = static_cast<uint8_t*>(_pData);
-        uint8_t* expectedPtr = buffer + _readPtr + sizeof(AllocationHeader);
-        
-        if (ptr != expectedPtr)
-        {
-            // Not the expected pointer, cannot deallocate out of order
-            return;
-        }
-        
-        // Get the allocation header
         AllocationHeader* header = reinterpret_cast<AllocationHeader*>(buffer + _readPtr);
         
-        // Advance read pointer
+        // Advance read pointer to consume this allocation
         Consume(header->size);
     }
     

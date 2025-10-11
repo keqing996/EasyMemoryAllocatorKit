@@ -103,25 +103,28 @@ TEST_CASE("SlabAllocator - Size Variants")
 {
     SUBCASE("Small objects (16 bytes)")
     {
-        SlabAllocator allocator(64, 32, 8);
+        SlabAllocator allocator(16, 32, 8);  // 16字节对象
         void* ptr = allocator.Allocate();
         CHECK(ptr != nullptr);
+        CHECK(allocator.GetObjectSize() >= 16);
         allocator.Deallocate(ptr);
     }
     
     SUBCASE("Medium objects (256 bytes)")
     {
-        SlabAllocator allocator(64, 32, 8);
+        SlabAllocator allocator(256, 16, 8);  // 256字节对象
         void* ptr = allocator.Allocate();
         CHECK(ptr != nullptr);
+        CHECK(allocator.GetObjectSize() >= 256);
         allocator.Deallocate(ptr);
     }
     
     SUBCASE("Large objects (1024 bytes)")
     {
-        SlabAllocator allocator(64, 32, 8);
+        SlabAllocator allocator(1024, 8, 8);  // 1024字节对象
         void* ptr = allocator.Allocate();
         CHECK(ptr != nullptr);
+        CHECK(allocator.GetObjectSize() >= 1024);
         allocator.Deallocate(ptr);
     }
 }

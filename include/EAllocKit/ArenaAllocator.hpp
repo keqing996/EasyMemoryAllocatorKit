@@ -1,92 +1,63 @@
 #pragma once
 
 #include <cstddef>
-#include <vector>
-#include <unordered_map>
-#include <string>
-#include <memory>
-#include "LinearAllocator.hpp"
+#include <cstdlib>
+#include <cassert>
+#include <new>
+#include <utility>
+#include <stdexcept>
 #include "Util/Util.hpp"
 
 namespace EAllocKit
 {
-    class ArenaAllocator;
-    
-    class ArenaHandle
-    {
-    public:
-        ArenaHandle() : _id(0) {}
-        explicit ArenaHandle(size_t id) : _id(id) {}
-        
-        bool IsValid() const { return _id != 0; }
-        size_t GetId() const { return _id; }
-        
-        bool operator==(const ArenaHandle& other) const { return _id == other._id; }
-        bool operator!=(const ArenaHandle& other) const { return _id != other._id; }
-        
-        struct Hash
-        {
-            size_t operator()(const ArenaHandle& handle) const
-            {
-                return std::hash<size_t>()(handle._id);
-            }
-        };
-        
-    private:
-        size_t _id;
-    };
-    
-    class ArenaScope
-    {
-    public:
-        ArenaScope(ArenaAllocator* allocator, size_t arenaSize = 64 * 1024);
-        ~ArenaScope();
-        
-        ArenaScope(const ArenaScope&) = delete;
-        ArenaScope& operator=(const ArenaScope&) = delete;
-        ArenaScope(ArenaScope&&) = delete;
-        ArenaScope& operator=(ArenaScope&&) = delete;
-        
-        template<typename T>
-        T* Allocate(size_t count = 1)
-        {
-            return static_cast<T*>(Allocate(sizeof(T) * count, alignof(T)));
-        }
-        
-        void* Allocate(size_t size, size_t alignment = 8);
-        
-        ArenaHandle GetHandle() const { return _handle; }
-        
-    private:
-        ArenaAllocator* _allocator;
-        ArenaHandle _handle;
-    };
-
     class ArenaAllocator
     {
-    private:
-        // Internal arena information structure
-        struct ArenaInfo
+    public:
+        
+        struct Checkpoint 
         {
-            std::unique_ptr<LinearAllocator> allocator;
-            std::string name;
-            size_t size;
-            bool isTemporary;  // Whether this is a temporary arena (scope-managed)
+            void* saved_ptr;        // Saved allocation pointer
+            size_t saved_remaining; // Saved remaining bytes
             
-            ArenaInfo(size_t arenaSize, size_t alignment, const std::string& arenaName, bool temp)
-                : allocator(std::make_unique<LinearAllocator>(arenaSize, alignment))
-                , name(arenaName)
-                , size(arenaSize)
-                , isTemporary(temp)
+            Checkpoint() : saved_ptr(nullptr), saved_remaining(0) {}
+            
+            Checkpoint(void* ptr, size_t remaining) 
+                : saved_ptr(ptr), saved_remaining(remaining) {}
+                
+            bool IsValid() const { return saved_ptr != nullptr; }
+        };
+
+        class ScopeGuard
+        {
+        public:
+            explicit ScopeGuard(ArenaAllocator& arena) 
+                : _arena(arena), _checkpoint(arena.SaveCheckpoint()) {}
+                
+            ~ScopeGuard() 
             {
+                if (_checkpoint.IsValid()) {
+                    _arena.RestoreCheckpoint(_checkpoint);
+                }
             }
+            
+            // Non-copyable, non-movable for safety
+            ScopeGuard(const ScopeGuard&) = delete;
+            ScopeGuard& operator=(const ScopeGuard&) = delete;
+            ScopeGuard(ScopeGuard&&) = delete;
+            ScopeGuard& operator=(ScopeGuard&&) = delete;
+
+            void Release() { _checkpoint = Checkpoint(); }
+
+            const Checkpoint& GetCheckpoint() const { return _checkpoint; }
+            
+        private:
+            ArenaAllocator& _arena;
+            Checkpoint _checkpoint;
         };
         
     public:
-        // Default arena size: 64KB, reasonable for most use cases
-        static constexpr size_t DEFAULT_ARENA_SIZE = 64 * 1024;
-        
-        ArenaAllocator(size_t defaultAlignment = 8);
+
+        explicit ArenaAllocator(size_t capacity, size_t default_alignment = 8);
         ~ArenaAllocator();
         
         ArenaAllocator(const ArenaAllocator&) = delete;
@@ -96,270 +67,199 @@ namespace EAllocKit
         
     public:
 
-        ArenaHandle CreateArena(const std::string& name, size_t size = DEFAULT_ARENA_SIZE);
-        ArenaHandle CreateTempArena(size_t size = DEFAULT_ARENA_SIZE);
+        void* Allocate(size_t size);
+        void* Allocate(size_t size, size_t alignment);
         
-        void DestroyArena(ArenaHandle handle);
-        void* AllocateFromArena(ArenaHandle handle, size_t size, size_t alignment = 0);
-        void ResetArena(ArenaHandle handle);
-        void ResetAll();
+
+        template<typename T, typename... Args>
+        T* Allocate(size_t count = 1, Args&&... args);
+        void Deallocate(void* ptr);
+        void Reset();
         
-        bool IsValidArena(ArenaHandle handle) const;
-        std::string GetArenaName(ArenaHandle handle) const;
-        size_t GetArenaSize(ArenaHandle handle) const;
-        size_t GetArenaUsage(ArenaHandle handle) const;
-        size_t GetArenaRemaining(ArenaHandle handle) const;
-        bool ContainsPointer(ArenaHandle handle, void* ptr) const;
+    public:
+
+        Checkpoint SaveCheckpoint() const;
+        void RestoreCheckpoint(const Checkpoint& checkpoint);
+        ScopeGuard CreateScope();
         
-        // === Global Statistics ===
+    public:
+        size_t GetCapacity() const { return _capacity; }
+        size_t GetUsedBytes() const;
+        size_t GetRemainingBytes() const;
+        double GetUtilization() const;
+        bool ContainsPointer(const void* ptr) const;
+        void* GetBaseAddress() const { return _memory; }
+        void* GetCurrentPointer() const { return _current; }
         
-        size_t GetArenaCount() const;
-        size_t GetTotalAllocatedBytes() const;
-        size_t GetTotalArenaBytes() const;
-        double GetMemoryUtilization() const;
-        
-        // List all arenas (for debugging)
-        std::vector<ArenaHandle> GetAllArenas() const;
-        
-        // Get internal LinearAllocator (for advanced usage)
-        LinearAllocator* GetArenaAllocator(ArenaHandle handle);
-        const LinearAllocator* GetArenaAllocator(ArenaHandle handle) const;
-        
-    private:
-        // Generate unique Arena ID
-        size_t GenerateId();
-        
-        // Find arena information
-        ArenaInfo* FindArena(ArenaHandle handle);
-        const ArenaInfo* FindArena(ArenaHandle handle) const;
-        
-        // Alignment size calculation
-        size_t GetAlignedSize(size_t size, size_t alignment) const;
+    public:
+        size_t GetAllocationCount() const { return _allocation_count; }
+        bool IsEmpty() const { return _current == _memory; }
+        bool IsFull() const { return GetRemainingBytes() < _default_alignment; }
         
     private:
-        std::unordered_map<ArenaHandle, std::unique_ptr<ArenaInfo>, ArenaHandle::Hash> _arenas;
-        size_t _nextId;                     // Next Arena ID
-        size_t _defaultAlignment;           // Default alignment
+        size_t AlignSize(size_t size, size_t alignment) const;
+        bool IsValidAlignment(size_t alignment) const;
+        
+    private:
+        void* _memory;              // Base memory address
+        void* _current;             // Current allocation pointer  
+        size_t _capacity;           // Total capacity in bytes
+        size_t _default_alignment;  // Default alignment
+        size_t _allocation_count;   // Number of allocations made
     };
-    // === ArenaScope Implementation ===
+
     
-    inline ArenaScope::ArenaScope(ArenaAllocator* allocator, size_t arenaSize)
-        : _allocator(allocator), _handle()
+    inline ArenaAllocator::ArenaAllocator(size_t capacity, size_t default_alignment)
+        : _memory(nullptr)
+        , _current(nullptr)
+        , _capacity(capacity)
+        , _default_alignment(default_alignment)
+        , _allocation_count(0)
     {
-        if (_allocator)
-        {
-            _handle = _allocator->CreateTempArena(arenaSize);
+        if (!IsValidAlignment(default_alignment)) {
+            throw std::invalid_argument("ArenaAllocator: default_alignment must be power of 2");
         }
-    }
-    
-    inline ArenaScope::~ArenaScope()
-    {
-        if (_allocator && _handle.IsValid())
-        {
-            _allocator->DestroyArena(_handle);
+        
+        if (capacity == 0) {
+            throw std::invalid_argument("ArenaAllocator: capacity must be > 0");
         }
-    }
-    
-    inline void* ArenaScope::Allocate(size_t size, size_t alignment)
-    {
-        if (!_allocator || !_handle.IsValid())
-            return nullptr;
-        return _allocator->AllocateFromArena(_handle, size, alignment);
-    }
-    
-    // === ArenaAllocator Implementation ===
-    
-    inline ArenaAllocator::ArenaAllocator(size_t defaultAlignment)
-        : _nextId(1), _defaultAlignment(defaultAlignment)
-    {
-        // No default arena - all arenas must be explicitly created
+        
+        _memory = std::malloc(capacity);
+        if (!_memory) {
+            throw std::bad_alloc();
+        }
+        
+        _current = _memory;
     }
     
     inline ArenaAllocator::~ArenaAllocator()
     {
-        _arenas.clear(); // unique_ptr自动清理
+        std::free(_memory);
     }
     
-    inline ArenaHandle ArenaAllocator::CreateArena(const std::string& name, size_t size)
+    inline void* ArenaAllocator::Allocate(size_t size)
     {
-        if (size < 1024)
-            size = 1024; // 最小Arena大小
-            
-        ArenaHandle handle(GenerateId());
-        auto arenaInfo = std::make_unique<ArenaInfo>(size, _defaultAlignment, name, false);
-        _arenas[handle] = std::move(arenaInfo);
+        return Allocate(size, _default_alignment);
+    }
+    
+    inline void* ArenaAllocator::Allocate(size_t size, size_t alignment)
+    {
+        if (size == 0) return nullptr;
         
-        return handle;
-    }
-    
-    inline ArenaHandle ArenaAllocator::CreateTempArena(size_t size)
-    {
-        if (size < 1024)
-            size = 1024;
-            
-        ArenaHandle handle(GenerateId());
-        auto arenaInfo = std::make_unique<ArenaInfo>(size, _defaultAlignment, "temp_" + std::to_string(handle.GetId()), true);
-        _arenas[handle] = std::move(arenaInfo);
+        if (!IsValidAlignment(alignment)) {
+            return nullptr;
+        }
         
-        return handle;
-    }
-    
-    inline void ArenaAllocator::DestroyArena(ArenaHandle handle)
-    {
-        auto it = _arenas.find(handle);
-        if (it != _arenas.end())
-        {
-            _arenas.erase(it);
-        }
-    }
-    
-    inline void* ArenaAllocator::AllocateFromArena(ArenaHandle handle, size_t size, size_t alignment)
-    {
-        if (size == 0)
+        // Align current pointer to required alignment
+        size_t current_addr = reinterpret_cast<size_t>(_current);
+        size_t aligned_addr = Util::UpAlignment(current_addr, alignment);
+        size_t alignment_padding = aligned_addr - current_addr;
+        
+        // Calculate total size needed (padding + actual size)
+        size_t total_size = alignment_padding + size;
+        
+        // Check if we have enough space
+        if (GetRemainingBytes() < total_size) {
             return nullptr;
-            
-        ArenaInfo* arena = FindArena(handle);
-        if (!arena)
-            return nullptr;
-            
-        size_t actualAlignment = (alignment == 0) ? _defaultAlignment : alignment;
-        return arena->allocator->Allocate(size, actualAlignment);
-    }
-    
-    inline void ArenaAllocator::ResetArena(ArenaHandle handle)
-    {
-        ArenaInfo* arena = FindArena(handle);
-        if (arena)
-        {
-            arena->allocator->Reset();
         }
+        
+        // Update current pointer and return aligned address
+        void* result = reinterpret_cast<void*>(aligned_addr);
+        _current = Util::PtrOffsetBytes(result, size);
+        ++_allocation_count;
+        
+        return result;
     }
     
-    inline void ArenaAllocator::ResetAll()
+    template<typename T, typename... Args>
+    inline T* ArenaAllocator::Allocate(size_t count, Args&&... args)
     {
-        for (auto& pair : _arenas)
-        {
-            pair.second->allocator->Reset();
+        if (count == 0) return nullptr;
+        
+        void* ptr = Allocate(sizeof(T) * count, alignof(T));
+        if (!ptr) return nullptr;
+        
+        T* typed_ptr = static_cast<T*>(ptr);
+        
+        // Construct objects
+        for (size_t i = 0; i < count; ++i) {
+            new (typed_ptr + i) T(std::forward<Args>(args)...);
         }
+        
+        return typed_ptr;
     }
     
-    inline bool ArenaAllocator::IsValidArena(ArenaHandle handle) const
+    inline void ArenaAllocator::Deallocate(void* ptr)
     {
-        return _arenas.find(handle) != _arenas.end();
+        // Arena doesn't support individual deallocation - this is intentional
+        (void)ptr; // Suppress unused parameter warning
     }
     
-    inline std::string ArenaAllocator::GetArenaName(ArenaHandle handle) const
+    inline void ArenaAllocator::Reset()
     {
-        const ArenaInfo* arena = FindArena(handle);
-        return arena ? arena->name : "";
+        _current = _memory;
+        _allocation_count = 0;
     }
     
-    inline size_t ArenaAllocator::GetArenaSize(ArenaHandle handle) const
+    inline ArenaAllocator::Checkpoint ArenaAllocator::SaveCheckpoint() const
     {
-        const ArenaInfo* arena = FindArena(handle);
-        return arena ? arena->size : 0;
+        return Checkpoint(_current, GetRemainingBytes());
     }
     
-    inline size_t ArenaAllocator::GetArenaUsage(ArenaHandle handle) const
+    inline void ArenaAllocator::RestoreCheckpoint(const Checkpoint& checkpoint)
     {
-        const ArenaInfo* arena = FindArena(handle);
-        if (!arena)
-            return 0;
-        return arena->size - arena->allocator->GetAvailableSpaceSize();
-    }
-    
-    inline size_t ArenaAllocator::GetArenaRemaining(ArenaHandle handle) const
-    {
-        const ArenaInfo* arena = FindArena(handle);
-        return arena ? arena->allocator->GetAvailableSpaceSize() : 0;
-    }
-    
-    inline bool ArenaAllocator::ContainsPointer(ArenaHandle handle, void* ptr) const
-    {
-        const ArenaInfo* arena = FindArena(handle);
-        if (!arena || !ptr)
-            return false;
-            
-        void* start = arena->allocator->GetMemoryBlockPtr();
-        void* end = Util::PtrOffsetBytes(start, arena->size);
-        return ptr >= start && ptr < end;
-    }
-    
-    inline size_t ArenaAllocator::GetArenaCount() const
-    {
-        return _arenas.size();
-    }
-    
-    inline size_t ArenaAllocator::GetTotalAllocatedBytes() const
-    {
-        size_t total = 0;
-        for (const auto& pair : _arenas)
-        {
-            total += pair.second->size - pair.second->allocator->GetAvailableSpaceSize();
+        if (!checkpoint.IsValid()) return;
+        
+        // Validate checkpoint is within our memory bounds
+        void* base = _memory;
+        void* end = Util::PtrOffsetBytes(_memory, _capacity);
+        
+        if (checkpoint.saved_ptr < base || checkpoint.saved_ptr > end) {
+            return; // Invalid checkpoint
         }
-        return total;
+        
+        _current = checkpoint.saved_ptr;
+        // Note: We don't restore allocation count as it's cumulative
     }
     
-    inline size_t ArenaAllocator::GetTotalArenaBytes() const
+    inline ArenaAllocator::ScopeGuard ArenaAllocator::CreateScope()
     {
-        size_t total = 0;
-        for (const auto& pair : _arenas)
-        {
-            total += pair.second->size;
-        }
-        return total;
+        return ScopeGuard(*this);
     }
     
-    inline double ArenaAllocator::GetMemoryUtilization() const
+    inline size_t ArenaAllocator::GetUsedBytes() const
     {
-        size_t totalCapacity = GetTotalArenaBytes();
-        if (totalCapacity == 0)
-            return 0.0;
-        return static_cast<double>(GetTotalAllocatedBytes()) / static_cast<double>(totalCapacity);
+        return reinterpret_cast<size_t>(_current) - reinterpret_cast<size_t>(_memory);
     }
     
-    inline std::vector<ArenaHandle> ArenaAllocator::GetAllArenas() const
+    inline size_t ArenaAllocator::GetRemainingBytes() const
     {
-        std::vector<ArenaHandle> handles;
-        handles.reserve(_arenas.size());
-        for (const auto& pair : _arenas)
-        {
-            handles.push_back(pair.first);
-        }
-        return handles;
+        return _capacity - GetUsedBytes();
     }
     
-    inline LinearAllocator* ArenaAllocator::GetArenaAllocator(ArenaHandle handle)
+    inline double ArenaAllocator::GetUtilization() const
     {
-        ArenaInfo* arena = FindArena(handle);
-        return arena ? arena->allocator.get() : nullptr;
+        if (_capacity == 0) return 0.0;
+        return static_cast<double>(GetUsedBytes()) / static_cast<double>(_capacity);
     }
     
-    inline const LinearAllocator* ArenaAllocator::GetArenaAllocator(ArenaHandle handle) const
+    inline bool ArenaAllocator::ContainsPointer(const void* ptr) const
     {
-        const ArenaInfo* arena = FindArena(handle);
-        return arena ? arena->allocator.get() : nullptr;
+        if (!ptr) return false;
+        
+        void* base = _memory;
+        void* end = Util::PtrOffsetBytes(_memory, _capacity);
+        
+        return ptr >= base && ptr < end;
     }
     
-    inline size_t ArenaAllocator::GenerateId()
-    {
-        return _nextId++;
-    }
-    
-    inline ArenaAllocator::ArenaInfo* ArenaAllocator::FindArena(ArenaHandle handle)
-    {
-        auto it = _arenas.find(handle);
-        return (it != _arenas.end()) ? it->second.get() : nullptr;
-    }
-    
-    inline const ArenaAllocator::ArenaInfo* ArenaAllocator::FindArena(ArenaHandle handle) const
-    {
-        auto it = _arenas.find(handle);
-        return (it != _arenas.end()) ? it->second.get() : nullptr;
-    }
-    
-    inline size_t ArenaAllocator::GetAlignedSize(size_t size, size_t alignment) const
+    inline size_t ArenaAllocator::AlignSize(size_t size, size_t alignment) const
     {
         return Util::UpAlignment(size, alignment);
+    }
+    
+    inline bool ArenaAllocator::IsValidAlignment(size_t alignment) const
+    {
+        return alignment > 0 && Util::IsPowerOfTwo(alignment);
     }
 }

@@ -213,4 +213,280 @@ TEST_SUITE("Util")
             CHECK(size3 == 16);
         }
     }
+    
+    TEST_CASE("TestIsPowerOfTwo - Comprehensive")
+    {
+        SUBCASE("Valid powers of two")
+        {
+            CHECK(Util::IsPowerOfTwo(1) == true);
+            CHECK(Util::IsPowerOfTwo(2) == true);
+            CHECK(Util::IsPowerOfTwo(4) == true);
+            CHECK(Util::IsPowerOfTwo(8) == true);
+            CHECK(Util::IsPowerOfTwo(16) == true);
+            CHECK(Util::IsPowerOfTwo(32) == true);
+            CHECK(Util::IsPowerOfTwo(64) == true);
+            CHECK(Util::IsPowerOfTwo(128) == true);
+            CHECK(Util::IsPowerOfTwo(256) == true);
+            CHECK(Util::IsPowerOfTwo(512) == true);
+            CHECK(Util::IsPowerOfTwo(1024) == true);
+        }
+        
+        SUBCASE("Invalid values")
+        {
+            CHECK(Util::IsPowerOfTwo(0) == false);
+            CHECK(Util::IsPowerOfTwo(3) == false);
+            CHECK(Util::IsPowerOfTwo(5) == false);
+            CHECK(Util::IsPowerOfTwo(6) == false);
+            CHECK(Util::IsPowerOfTwo(7) == false);
+            CHECK(Util::IsPowerOfTwo(9) == false);
+            CHECK(Util::IsPowerOfTwo(12) == false);
+            CHECK(Util::IsPowerOfTwo(15) == false);
+            CHECK(Util::IsPowerOfTwo(17) == false);
+            CHECK(Util::IsPowerOfTwo(100) == false);
+            CHECK(Util::IsPowerOfTwo(1000) == false);
+        }
+        
+        SUBCASE("Large powers of two")
+        {
+            CHECK(Util::IsPowerOfTwo(2048) == true);
+            CHECK(Util::IsPowerOfTwo(4096) == true);
+            CHECK(Util::IsPowerOfTwo(8192) == true);
+            CHECK(Util::IsPowerOfTwo(16384) == true);
+            CHECK(Util::IsPowerOfTwo(32768) == true);
+            CHECK(Util::IsPowerOfTwo(65536) == true);
+            CHECK(Util::IsPowerOfTwo(1048576) == true); // 1MB
+            CHECK(Util::IsPowerOfTwo(1073741824) == true); // 1GB
+        }
+    }
+    
+    TEST_CASE("TestToAddr - Address Conversion")
+    {
+        SUBCASE("Valid pointer conversion")
+        {
+            int value = 42;
+            int* ptr = &value;
+            size_t addr = Util::ToAddr(ptr);
+            CHECK(addr == reinterpret_cast<size_t>(ptr));
+            CHECK(addr != 0);
+        }
+        
+        SUBCASE("Different pointer types")
+        {
+            double d = 3.14;
+            char c = 'A';
+            int arr[10];
+            
+            CHECK(Util::ToAddr(&d) == reinterpret_cast<size_t>(&d));
+            CHECK(Util::ToAddr(&c) == reinterpret_cast<size_t>(&c));
+            CHECK(Util::ToAddr(arr) == reinterpret_cast<size_t>(arr));
+        }
+    }
+    
+    TEST_CASE("TestPtrOffsetBytes - Pointer Arithmetic")
+    {
+        SUBCASE("Basic offset operations")
+        {
+            char buffer[1000];
+            char* base = buffer;
+            
+            char* offset0 = Util::PtrOffsetBytes(base, 0);
+            char* offset10 = Util::PtrOffsetBytes(base, 10);
+            char* offset100 = Util::PtrOffsetBytes(base, 100);
+            
+            CHECK(offset0 == base);
+            CHECK(offset10 == base + 10);
+            CHECK(offset100 == base + 100);
+        }
+        
+        SUBCASE("Large offset operations")
+        {
+            char* base = new char[10000];
+            
+            char* offset1k = Util::PtrOffsetBytes(base, 1024);
+            char* offset5k = Util::PtrOffsetBytes(base, 5120);
+            
+            CHECK(offset1k == base + 1024);
+            CHECK(offset5k == base + 5120);
+            
+            delete[] base;
+        }
+        
+        SUBCASE("Negative offset")
+        {
+            char buffer[1000];
+            char* middle = buffer + 500;
+            
+            char* before = Util::PtrOffsetBytes(middle, -100);
+            CHECK(before == middle - 100);
+        }
+    }
+    
+    TEST_CASE("TestAlignment - Stress Testing")
+    {
+        SUBCASE("Random alignment scenarios")
+        {
+            std::vector<size_t> alignments = {1, 2, 4, 8, 16, 32, 64, 128, 256, 512};
+            std::vector<size_t> sizes = {1, 3, 7, 15, 31, 63, 127, 255, 511, 1023};
+            
+            for (size_t alignment : alignments) {
+                for (size_t size : sizes) {
+                    size_t aligned = Util::UpAlignment(size, alignment);
+                    
+                    // Verify alignment
+                    CHECK(aligned % alignment == 0);
+                    
+                    // Verify it's the smallest aligned value >= size
+                    CHECK(aligned >= size);
+                    if (aligned > alignment) {
+                        CHECK((aligned - alignment) < size);
+                    }
+                }
+            }
+        }
+        
+        SUBCASE("Boundary conditions")
+        {
+            CHECK(Util::UpAlignment(SIZE_MAX - 1, 2) == SIZE_MAX - 1); // Even number
+            CHECK(Util::UpAlignment(UINT32_MAX, 1) == UINT32_MAX);
+            
+            // Test very large alignments
+            CHECK(Util::UpAlignment(1, 1024) == 1024);
+            CHECK(Util::UpAlignment(1000, 1024) == 1024);
+            CHECK(Util::UpAlignment(1024, 1024) == 1024);
+            CHECK(Util::UpAlignment(1025, 1024) == 2048);
+        }
+    }
+    
+    TEST_CASE("TestUtility - Integration Tests")
+    {
+        SUBCASE("Alignment and padding integration")
+        {
+            // Test that GetPaddedSize and UpAlignment work consistently
+            struct TestStruct {
+                char a;
+                int b;
+                double c;
+            };
+            
+            size_t alignments[] = {1, 4, 8, 16, 32};
+            
+            for (size_t alignment : alignments) {
+                size_t paddedSize = Util::GetPaddedSize<TestStruct>(alignment);
+                size_t manualPadded = Util::UpAlignment(sizeof(TestStruct), alignment);
+                
+                CHECK(paddedSize == manualPadded);
+                CHECK(paddedSize % alignment == 0);
+                CHECK(paddedSize >= sizeof(TestStruct));
+            }
+        }
+        
+        SUBCASE("Pointer arithmetic consistency")
+        {
+            char buffer[1000];
+            char* base = buffer;
+            
+            for (size_t i = 0; i < 10; i++) {
+                std::ptrdiff_t offset = static_cast<std::ptrdiff_t>(i * 100);
+                char* ptr = Util::PtrOffsetBytes(base, offset);
+                size_t addr1 = Util::ToAddr(ptr);
+                size_t addr2 = Util::ToAddr(base) + static_cast<size_t>(offset);
+                
+                CHECK(addr1 == addr2);
+            }
+        }
+        
+        SUBCASE("Power of two validation for common alignments")
+        {
+            size_t commonAlignments[] = {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024};
+            
+            for (size_t alignment : commonAlignments) {
+                CHECK(Util::IsPowerOfTwo(alignment) == true);
+                
+                // Test non-power-of-two variants
+                // Skip alignment - 1 for small values where it might be a power of 2
+                if (alignment > 2) {
+                    CHECK(Util::IsPowerOfTwo(alignment - 1) == false);
+                }
+                if (alignment > 1) {
+                    CHECK(Util::IsPowerOfTwo(alignment + 1) == false);
+                }
+            }
+        }
+    }
+    
+    TEST_CASE("TestRoundUpToPowerOf2")
+    {
+        SUBCASE("Basic rounding")
+        {
+            CHECK(Util::RoundUpToPowerOf2(0) == 1);
+            CHECK(Util::RoundUpToPowerOf2(1) == 1);
+            CHECK(Util::RoundUpToPowerOf2(2) == 2);
+            CHECK(Util::RoundUpToPowerOf2(3) == 4);
+            CHECK(Util::RoundUpToPowerOf2(4) == 4);
+            CHECK(Util::RoundUpToPowerOf2(5) == 8);
+            CHECK(Util::RoundUpToPowerOf2(8) == 8);
+            CHECK(Util::RoundUpToPowerOf2(9) == 16);
+            CHECK(Util::RoundUpToPowerOf2(15) == 16);
+            CHECK(Util::RoundUpToPowerOf2(16) == 16);
+            CHECK(Util::RoundUpToPowerOf2(17) == 32);
+        }
+        
+        SUBCASE("Large values")
+        {
+            CHECK(Util::RoundUpToPowerOf2(1000) == 1024);
+            CHECK(Util::RoundUpToPowerOf2(1024) == 1024);
+            CHECK(Util::RoundUpToPowerOf2(1025) == 2048);
+            CHECK(Util::RoundUpToPowerOf2(100000) == 131072);
+        }
+    }
+    
+    TEST_CASE("TestLog2")
+    {
+        SUBCASE("Powers of two")
+        {
+            CHECK(Util::Log2(1) == 0);
+            CHECK(Util::Log2(2) == 1);
+            CHECK(Util::Log2(4) == 2);
+            CHECK(Util::Log2(8) == 3);
+            CHECK(Util::Log2(16) == 4);
+            CHECK(Util::Log2(32) == 5);
+            CHECK(Util::Log2(64) == 6);
+            CHECK(Util::Log2(128) == 7);
+            CHECK(Util::Log2(256) == 8);
+            CHECK(Util::Log2(512) == 9);
+            CHECK(Util::Log2(1024) == 10);
+        }
+        
+        SUBCASE("Non-powers of two")
+        {
+            CHECK(Util::Log2(3) == 1);   // floor(log2(3))
+            CHECK(Util::Log2(5) == 2);   // floor(log2(5))
+            CHECK(Util::Log2(7) == 2);   // floor(log2(7))
+            CHECK(Util::Log2(15) == 3);  // floor(log2(15))
+            CHECK(Util::Log2(31) == 4);  // floor(log2(31))
+        }
+    }
+    
+    TEST_CASE("TestUpAlignmentPowerOfTwo")
+    {
+        SUBCASE("Small values")
+        {
+            CHECK(Util::UpAlignmentPowerOfTwo(0) == 4);
+            CHECK(Util::UpAlignmentPowerOfTwo(1) == 4);
+            CHECK(Util::UpAlignmentPowerOfTwo(2) == 4);
+            CHECK(Util::UpAlignmentPowerOfTwo(3) == 4);
+            CHECK(Util::UpAlignmentPowerOfTwo(4) == 4);
+            CHECK(Util::UpAlignmentPowerOfTwo(5) == 8);
+        }
+        
+        SUBCASE("Larger values")
+        {
+            CHECK(Util::UpAlignmentPowerOfTwo(8) == 8);
+            CHECK(Util::UpAlignmentPowerOfTwo(9) == 16);
+            CHECK(Util::UpAlignmentPowerOfTwo(16) == 16);
+            CHECK(Util::UpAlignmentPowerOfTwo(17) == 32);
+            CHECK(Util::UpAlignmentPowerOfTwo(32) == 32);
+            CHECK(Util::UpAlignmentPowerOfTwo(33) == 64);
+        }
+    }
 }

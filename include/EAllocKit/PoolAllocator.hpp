@@ -42,33 +42,44 @@ namespace EAllocKit
         if (!Util::IsPowerOfTwo(defaultAlignment))
             throw std::invalid_argument("PoolAllocator defaultAlignment must be a power of 2");
             
-        // Ensure Node size is aligned to maintain user data alignment
-        size_t alignedNodeSize = Util::UpAlignment(sizeof(Node), _defaultAlignment);
-        size_t blockRequiredSize = alignedNodeSize + blockSize;
-        // Align total block size to ensure next block starts at aligned address
-        blockRequiredSize = Util::UpAlignment(blockRequiredSize, _defaultAlignment);
-        size_t needSize = blockRequiredSize * blockNum;
-
-        _pData = ::malloc(needSize);
-
-        _pFreeBlockList = static_cast<Node*>(_pData);
-        for (size_t i = 0; i < blockNum; i++)
+        if (blockNum == 0)
         {
-            Node* pBlockNode = static_cast<Node*>(Util::PtrOffsetBytes(_pData, i * blockRequiredSize));
-            if (i == blockNum - 1)
-                pBlockNode->pNext = nullptr;
-            else
+            _pData = nullptr;
+            _pFreeBlockList = nullptr;
+        }
+        else
+        {
+            // Calculate space needed per block: Node header + space for distance + user data + padding for alignment
+            size_t headerSize = sizeof(Node);
+            size_t minimalUserOffset = headerSize + 4; // 4 bytes for distance storage
+            size_t maxPadding = _defaultAlignment - 1;
+            size_t blockRequiredSize = minimalUserOffset + _blockSize + maxPadding;
+            size_t needSize = blockRequiredSize * blockNum;
+
+            _pData = ::malloc(needSize);
+
+            _pFreeBlockList = static_cast<Node*>(_pData);
+            for (size_t i = 0; i < blockNum; i++)
             {
-                Node* pNextBlockNode = static_cast<Node*>(Util::PtrOffsetBytes(_pData, (i + 1) * blockRequiredSize));
-                pBlockNode->pNext = pNextBlockNode;
+                Node* pBlockNode = static_cast<Node*>(Util::PtrOffsetBytes(_pData, i * blockRequiredSize));
+                if (i == blockNum - 1)
+                    pBlockNode->pNext = nullptr;
+                else
+                {
+                    Node* pNextBlockNode = static_cast<Node*>(Util::PtrOffsetBytes(_pData, (i + 1) * blockRequiredSize));
+                    pBlockNode->pNext = pNextBlockNode;
+                }
             }
         }
     }
 
     inline PoolAllocator::~PoolAllocator()
     {
-        ::free(_pData);
-        _pData = nullptr;
+        if (_pData != nullptr)
+        {
+            ::free(_pData);
+            _pData = nullptr;
+        }
     }
 
     inline void* PoolAllocator::Allocate()
@@ -79,16 +90,36 @@ namespace EAllocKit
         Node* pResult = _pFreeBlockList;
         _pFreeBlockList = _pFreeBlockList->pNext;
         
-        // User data starts after aligned Node header
-        size_t alignedNodeSize = Util::UpAlignment(sizeof(Node), _defaultAlignment);
-        return Util::PtrOffsetBytes(pResult, alignedNodeSize);
+        // Calculate aligned user data address (like FreeListAllocator)
+        size_t nodeStartAddr = Util::ToAddr(pResult);
+        size_t headerSize = sizeof(Node);
+        size_t afterHeaderAddr = nodeStartAddr + headerSize;
+        size_t minimalUserAddr = afterHeaderAddr + 4;  // Reserve 4 bytes for distance
+        size_t alignedUserAddr = Util::UpAlignment(minimalUserAddr, _defaultAlignment);
+        
+        // Store distance from user pointer back to node header
+        void* pAlignedUserData = reinterpret_cast<void*>(alignedUserAddr);
+        uint32_t distance = static_cast<uint32_t>(alignedUserAddr - nodeStartAddr);
+        uint32_t* pDistanceStorage = reinterpret_cast<uint32_t*>(alignedUserAddr - 4);
+        *pDistanceStorage = distance;
+        
+        return pAlignedUserData;
     }
 
     inline void PoolAllocator::Deallocate(void* p)
     {
-        // Node header is before user data, at aligned offset
-        size_t alignedNodeSize = Util::UpAlignment(sizeof(Node), _defaultAlignment);
-        Node* pNode = static_cast<Node*>(Util::PtrOffsetBytes(p, -static_cast<ptrdiff_t>(alignedNodeSize)));
+        if (p == nullptr)
+            return; // Safe to deallocate nullptr, like free()
+            
+        // Retrieve distance to find the node header (like FreeListAllocator)
+        uint32_t* pDistanceStorage = reinterpret_cast<uint32_t*>(static_cast<char*>(p) - 4);
+        uint32_t distance = *pDistanceStorage;
+        
+        // Calculate node address
+        size_t userAddr = Util::ToAddr(p);
+        size_t nodeAddr = userAddr - distance;
+        Node* pNode = reinterpret_cast<Node*>(nodeAddr);
+        
         pNode->pNext = _pFreeBlockList;
         _pFreeBlockList = pNode;
     }
