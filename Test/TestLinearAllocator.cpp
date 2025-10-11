@@ -341,3 +341,290 @@ TEST_CASE("LinearAllocator - Non-power-of-2 Alignment Exception")
         CHECK(reinterpret_cast<size_t>(p) % alignment == 0);
     }
 }
+
+TEST_CASE("LinearAllocator - Memory Statistics and Boundaries")
+{
+    SUBCASE("Available space tracking")
+    {
+        LinearAllocator allocator(1024, 8);
+        
+        CHECK(allocator.GetAvailableSpaceSize() == 1024);
+        
+        void* ptr1 = allocator.Allocate(100);
+        size_t available1 = allocator.GetAvailableSpaceSize();
+        CHECK(available1 < 1024);
+        CHECK(available1 <= 1024 - 100); // May be less due to alignment
+        
+        void* ptr2 = allocator.Allocate(200);
+        size_t available2 = allocator.GetAvailableSpaceSize();
+        CHECK(available2 < available1);
+        
+        allocator.Reset();
+        CHECK(allocator.GetAvailableSpaceSize() == 1024);
+    }
+    
+    SUBCASE("Memory block pointer consistency")
+    {
+        LinearAllocator allocator(2048, 16);
+        
+        void* blockPtr = allocator.GetMemoryBlockPtr();
+        CHECK(blockPtr != nullptr);
+        
+        // All allocations should be within the block
+        for (int i = 0; i < 10; i++) {
+            void* ptr = allocator.Allocate(50);
+            CHECK(ptr >= blockPtr);
+            CHECK(ptr < static_cast<char*>(blockPtr) + 2048);
+        }
+    }
+    
+    SUBCASE("Current pointer progression")
+    {
+        LinearAllocator allocator(1024, 8);
+        
+        void* initialCurrent = allocator.GetCurrentPtr();
+        CHECK(initialCurrent == allocator.GetMemoryBlockPtr());
+        
+        void* ptr1 = allocator.Allocate(64);
+        void* current1 = allocator.GetCurrentPtr();
+        CHECK(current1 > initialCurrent);
+        
+        void* ptr2 = allocator.Allocate(128);
+        void* current2 = allocator.GetCurrentPtr();
+        CHECK(current2 > current1);
+        
+        allocator.Reset();
+        void* currentAfterReset = allocator.GetCurrentPtr();
+        CHECK(currentAfterReset == initialCurrent);
+    }
+}
+
+TEST_CASE("LinearAllocator - Edge Cases and Error Conditions")
+{
+    SUBCASE("Zero size allocation")
+    {
+        LinearAllocator allocator(1024, 8);
+        
+        void* ptr = allocator.Allocate(0);
+        // Behavior may vary - either nullptr or small allocation
+        // Just ensure it doesn't crash
+        CHECK(true);
+    }
+    
+    SUBCASE("Allocation larger than total size")
+    {
+        LinearAllocator allocator(512, 8);
+        
+        void* ptr = allocator.Allocate(1024);
+        CHECK(ptr == nullptr);
+        
+        // Allocator should still be usable
+        void* smallPtr = allocator.Allocate(100);
+        CHECK(smallPtr != nullptr);
+    }
+    
+    SUBCASE("Exact capacity allocation")
+    {
+        LinearAllocator allocator(256, 8);
+        
+        void* ptr = allocator.Allocate(256);
+        // May succeed or fail depending on alignment overhead
+        
+        if (ptr) {
+            // Should have no space left
+            CHECK(allocator.GetAvailableSpaceSize() == 0);
+            
+            // Next allocation should fail
+            void* ptr2 = allocator.Allocate(1);
+            CHECK(ptr2 == nullptr);
+        }
+    }
+    
+    SUBCASE("Multiple resets")
+    {
+        LinearAllocator allocator(1024, 8);
+        
+        for (int i = 0; i < 5; i++) {
+            void* ptr1 = allocator.Allocate(100);
+            void* ptr2 = allocator.Allocate(200);
+            CHECK(ptr1 != nullptr);
+            CHECK(ptr2 != nullptr);
+            
+            allocator.Reset();
+            CHECK(allocator.GetCurrentPtr() == allocator.GetMemoryBlockPtr());
+            CHECK(allocator.GetAvailableSpaceSize() == 1024);
+        }
+    }
+}
+
+TEST_CASE("LinearAllocator - Advanced Alignment Scenarios")
+{
+    SUBCASE("Mixed alignment requirements")
+    {
+        LinearAllocator allocator(2048, 8);
+        
+        // Allocate with various alignments in sequence
+        void* ptr1 = allocator.Allocate(10, 4);   // 4-byte aligned
+        void* ptr2 = allocator.Allocate(20, 16);  // 16-byte aligned
+        void* ptr3 = allocator.Allocate(30, 8);   // 8-byte aligned
+        void* ptr4 = allocator.Allocate(40, 32);  // 32-byte aligned
+        
+        CHECK(ptr1 != nullptr);
+        CHECK(ptr2 != nullptr);
+        CHECK(ptr3 != nullptr);
+        CHECK(ptr4 != nullptr);
+        
+        // Verify alignment
+        CHECK(reinterpret_cast<uintptr_t>(ptr1) % 4 == 0);
+        CHECK(reinterpret_cast<uintptr_t>(ptr2) % 16 == 0);
+        CHECK(reinterpret_cast<uintptr_t>(ptr3) % 8 == 0);
+        CHECK(reinterpret_cast<uintptr_t>(ptr4) % 32 == 0);
+        
+        // Verify order (should be increasing)
+        CHECK(ptr2 > ptr1);
+        CHECK(ptr3 > ptr2);
+        CHECK(ptr4 > ptr3);
+    }
+    
+    SUBCASE("Large alignment requirements")
+    {
+        LinearAllocator allocator(4096, 8);
+        
+        void* ptr64 = allocator.Allocate(50, 64);
+        void* ptr128 = allocator.Allocate(50, 128);
+        void* ptr256 = allocator.Allocate(50, 256);
+        
+        if (ptr64) CHECK(reinterpret_cast<uintptr_t>(ptr64) % 64 == 0);
+        if (ptr128) CHECK(reinterpret_cast<uintptr_t>(ptr128) % 128 == 0);
+        if (ptr256) CHECK(reinterpret_cast<uintptr_t>(ptr256) % 256 == 0);
+    }
+}
+
+TEST_CASE("LinearAllocator - Constructor Edge Cases")
+{
+    SUBCASE("Minimum size allocator")
+    {
+        LinearAllocator allocator(1, 4);
+        void* ptr = allocator.Allocate(1);
+        // Should work or fail gracefully
+        CHECK(true);
+    }
+    
+    SUBCASE("Large allocator")
+    {
+        LinearAllocator allocator(1024 * 1024, 8); // 1MB
+        
+        void* ptr1 = allocator.Allocate(100000);
+        void* ptr2 = allocator.Allocate(200000);
+        
+        CHECK(ptr1 != nullptr);
+        CHECK(ptr2 != nullptr);
+        CHECK(ptr2 > ptr1);
+    }
+    
+    SUBCASE("Constructor with non-power-of-2 default alignment")
+    {
+        // Should throw exception
+        CHECK_THROWS_AS(LinearAllocator(1024, 3), std::invalid_argument);
+        CHECK_THROWS_AS(LinearAllocator(1024, 6), std::invalid_argument);
+        CHECK_THROWS_AS(LinearAllocator(1024, 12), std::invalid_argument);
+    }
+}
+
+TEST_CASE("LinearAllocator - Stress Testing")
+{
+    SUBCASE("Many small allocations")
+    {
+        LinearAllocator allocator(65536, 8); // 64KB
+        
+        std::vector<void*> ptrs;
+        const size_t allocSize = 32;
+        
+        // Allocate as many as possible
+        while (true) {
+            void* ptr = allocator.Allocate(allocSize);
+            if (!ptr) break;
+            ptrs.push_back(ptr);
+        }
+        
+        CHECK(ptrs.size() > 0);
+        
+        // Verify all pointers are valid and properly aligned
+        for (size_t i = 0; i < ptrs.size(); i++) {
+            CHECK(ptrs[i] != nullptr);
+            CHECK(reinterpret_cast<uintptr_t>(ptrs[i]) % 8 == 0);
+            
+            if (i > 0) {
+                CHECK(ptrs[i] > ptrs[i-1]); // Should be in order
+            }
+        }
+        
+        // Reset and verify we can do it again
+        allocator.Reset();
+        size_t secondRunCount = 0;
+        while (true) {
+            void* ptr = allocator.Allocate(allocSize);
+            if (!ptr) break;
+            secondRunCount++;
+        }
+        
+        CHECK(secondRunCount >= ptrs.size()); // Should be at least as many
+    }
+}
+
+// Global counters for object lifecycle testing
+static int g_constructorCalls = 0;
+static int g_destructorCalls = 0;
+
+struct TestLifecycleObject {
+    int value;
+    double data;
+    
+    TestLifecycleObject(int v = 42) : value(v), data(3.14) { 
+        g_constructorCalls++; 
+    }
+    
+    ~TestLifecycleObject() { 
+        g_destructorCalls++; 
+    }
+};
+
+TEST_CASE("LinearAllocator - Object Lifecycle")
+{
+    SUBCASE("Construction and destruction patterns")
+    {
+        LinearAllocator allocator(2048, 8);
+        
+        g_constructorCalls = 0;
+        g_destructorCalls = 0;
+        
+        std::vector<TestLifecycleObject*> objects;
+        
+        // Create objects using placement new
+        for (int i = 0; i < 10; i++) {
+            void* memory = allocator.Allocate(sizeof(TestLifecycleObject));
+            CHECK(memory != nullptr);
+            
+            TestLifecycleObject* obj = new (memory) TestLifecycleObject(i);
+            objects.push_back(obj);
+        }
+        
+        CHECK(g_constructorCalls == 10);
+        
+        // Verify object values
+        for (size_t i = 0; i < objects.size(); i++) {
+            CHECK(objects[i]->value == static_cast<int>(i));
+            CHECK(objects[i]->data == doctest::Approx(3.14));
+        }
+        
+        // Manually destroy objects
+        for (TestLifecycleObject* obj : objects) {
+            obj->~TestLifecycleObject();
+        }
+        
+        CHECK(g_destructorCalls == 10);
+        
+        // Reset allocator (memory reclaimed but objects already destroyed)
+        allocator.Reset();
+    }
+}

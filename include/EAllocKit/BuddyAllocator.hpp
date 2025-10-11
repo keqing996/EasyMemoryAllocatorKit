@@ -120,13 +120,31 @@ namespace EAllocKit
         if (!Util::IsPowerOfTwo(alignment))
             throw std::invalid_argument("BuddyAllocator only supports power-of-2 alignments");
         
+        // Check for size overflow - if size is too large, return nullptr
+        if (size > _size)
+            return nullptr;
+        
         // Buddy allocator doesn't support arbitrary alignment efficiently
         size_t adjustedSize = size;
         if (alignment > _defaultAlignment)
+        {
+            // Check for overflow in size + alignment
+            if (SIZE_MAX - size < alignment)
+                return nullptr;
             adjustedSize = size + alignment;
+        }
+        
+        // Check if adjustedSize is larger than our total capacity
+        if (adjustedSize > _size)
+            return nullptr;
         
         // Round up to power of 2, with minimum size
         size_t blockSize = Util::RoundUpToPowerOf2(adjustedSize);
+        
+        // Check for overflow in RoundUpToPowerOf2 (it returns 0 on overflow)
+        if (blockSize == 0 || blockSize < adjustedSize)
+            return nullptr;
+            
         if (blockSize < MIN_BLOCK_SIZE)
             blockSize = MIN_BLOCK_SIZE;
         

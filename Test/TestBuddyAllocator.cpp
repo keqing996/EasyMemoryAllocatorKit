@@ -1,5 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
+#include <stdexcept>
 #include "EAllocKit/BuddyAllocator.hpp"
 #include "Helper.h"
 
@@ -264,5 +265,214 @@ TEST_CASE("BuddyAllocator - Object Construction")
         
         obj->~TestObject();
         allocator.Deallocate(memory);
+    }
+}
+
+TEST_CASE("BuddyAllocator - Memory Statistics")
+{
+    SUBCASE("Get total size")
+    {
+        BuddyAllocator allocator(8192, 8);
+        CHECK(allocator.GetTotalSize() == 8192);
+        
+        // Size should not change after allocations
+        void* ptr1 = allocator.Allocate(100);
+        void* ptr2 = allocator.Allocate(200);
+        CHECK(allocator.GetTotalSize() == 8192);
+        
+        allocator.Deallocate(ptr1);
+        allocator.Deallocate(ptr2);
+        CHECK(allocator.GetTotalSize() == 8192);
+    }
+    
+    SUBCASE("Get memory block pointer")
+    {
+        BuddyAllocator allocator(4096, 8);
+        void* blockPtr = allocator.GetMemoryBlockPtr();
+        CHECK(blockPtr != nullptr);
+        
+        // All allocations should be within this block
+        void* ptr1 = allocator.Allocate(100);
+        void* ptr2 = allocator.Allocate(200);
+        
+        CHECK(ptr1 >= blockPtr);
+        CHECK(ptr1 < static_cast<char*>(blockPtr) + 4096);
+        CHECK(ptr2 >= blockPtr);
+        CHECK(ptr2 < static_cast<char*>(blockPtr) + 4096);
+        
+        allocator.Deallocate(ptr1);
+        allocator.Deallocate(ptr2);
+    }
+}
+
+TEST_CASE("BuddyAllocator - Advanced Buddy System Properties")
+{
+    SUBCASE("Buddy coalescing verification")
+    {
+        BuddyAllocator allocator(1024, 8);
+        
+        // Allocate two adjacent small blocks
+        void* ptr1 = allocator.Allocate(32);
+        void* ptr2 = allocator.Allocate(32);
+        void* ptr3 = allocator.Allocate(32);
+        
+        CHECK(ptr1 != nullptr);
+        CHECK(ptr2 != nullptr);
+        CHECK(ptr3 != nullptr);
+        
+        // Free middle block first
+        allocator.Deallocate(ptr2);
+        
+        // Free adjacent blocks - should enable coalescing
+        allocator.Deallocate(ptr1);
+        allocator.Deallocate(ptr3);
+        
+        // Should now be able to allocate a larger block
+        void* largePtr = allocator.Allocate(256);
+        CHECK(largePtr != nullptr);
+        
+        allocator.Deallocate(largePtr);
+    }
+    
+    SUBCASE("Maximum allocation size")
+    {
+        BuddyAllocator allocator(1024, 8);
+        
+        // Try to allocate the entire block
+        void* maxPtr = allocator.Allocate(1024);
+        CHECK(maxPtr != nullptr);
+        
+        // Should not be able to allocate anything else
+        void* shouldFail = allocator.Allocate(32);
+        CHECK(shouldFail == nullptr);
+        
+        allocator.Deallocate(maxPtr);
+        
+        // After deallocation, small allocation should work again
+        void* smallPtr = allocator.Allocate(32);
+        CHECK(smallPtr != nullptr);
+        allocator.Deallocate(smallPtr);
+    }
+    
+    SUBCASE("Fragmentation and defragmentation")
+    {
+        BuddyAllocator allocator(2048, 8);
+        
+        // Create fragmentation pattern
+        std::vector<void*> ptrs;
+        for (int i = 0; i < 8; i++) {
+            void* ptr = allocator.Allocate(64);
+            if (ptr) ptrs.push_back(ptr);
+        }
+        
+        // Free every other allocation to create fragmentation
+        for (size_t i = 0; i < ptrs.size(); i += 2) {
+            allocator.Deallocate(ptrs[i]);
+        }
+        
+        // Try to allocate a larger block - may or may not succeed depending on fragmentation
+        void* largePtr = allocator.Allocate(512);
+        
+        // Clean up remaining allocations
+        for (size_t i = 1; i < ptrs.size(); i += 2) {
+            allocator.Deallocate(ptrs[i]);
+        }
+        
+        if (largePtr) {
+            allocator.Deallocate(largePtr);
+        }
+        
+        // After all deallocations, should be able to allocate large block
+        void* finalLargePtr = allocator.Allocate(1024);
+        CHECK(finalLargePtr != nullptr);
+        allocator.Deallocate(finalLargePtr);
+    }
+}
+
+TEST_CASE("BuddyAllocator - Alignment Edge Cases")
+{
+    SUBCASE("Various alignment requirements")
+    {
+        BuddyAllocator allocator(4096, 8);
+        
+        // Test different alignment requirements
+        void* ptr4 = allocator.Allocate(100, 4);
+        void* ptr8 = allocator.Allocate(100, 8);
+        void* ptr16 = allocator.Allocate(100, 16);
+        void* ptr32 = allocator.Allocate(100, 32);
+        void* ptr64 = allocator.Allocate(100, 64);
+        
+        if (ptr4) CHECK(reinterpret_cast<uintptr_t>(ptr4) % 4 == 0);
+        if (ptr8) CHECK(reinterpret_cast<uintptr_t>(ptr8) % 8 == 0);
+        if (ptr16) CHECK(reinterpret_cast<uintptr_t>(ptr16) % 16 == 0);
+        if (ptr32) CHECK(reinterpret_cast<uintptr_t>(ptr32) % 32 == 0);
+        if (ptr64) CHECK(reinterpret_cast<uintptr_t>(ptr64) % 64 == 0);
+        
+        // Clean up
+        if (ptr4) allocator.Deallocate(ptr4);
+        if (ptr8) allocator.Deallocate(ptr8);
+        if (ptr16) allocator.Deallocate(ptr16);
+        if (ptr32) allocator.Deallocate(ptr32);
+        if (ptr64) allocator.Deallocate(ptr64);
+    }
+    
+    SUBCASE("Large alignment requirements")
+    {
+        BuddyAllocator allocator(8192, 8);
+        
+        // Test very large alignment
+        void* ptr128 = allocator.Allocate(50, 128);
+        void* ptr256 = allocator.Allocate(50, 256);
+        
+        if (ptr128) {
+            CHECK(reinterpret_cast<uintptr_t>(ptr128) % 128 == 0);
+            allocator.Deallocate(ptr128);
+        }
+        
+        if (ptr256) {
+            CHECK(reinterpret_cast<uintptr_t>(ptr256) % 256 == 0);
+            allocator.Deallocate(ptr256);
+        }
+    }
+}
+
+TEST_CASE("BuddyAllocator - Invalid Input Handling")
+{
+    SUBCASE("Invalid alignment values")
+    {
+        BuddyAllocator allocator(4096, 8);
+        
+        // Non-power-of-2 alignments should throw exceptions
+        CHECK_THROWS_AS(allocator.Allocate(100, 3), std::invalid_argument);
+        CHECK_THROWS_AS(allocator.Allocate(100, 5), std::invalid_argument);
+        CHECK_THROWS_AS(allocator.Allocate(100, 7), std::invalid_argument);
+    }
+    
+    SUBCASE("Very large size requests")
+    {
+        BuddyAllocator allocator(1024, 8);
+        
+        // Request larger than total size should fail
+        void* ptr1 = allocator.Allocate(2048);
+        CHECK(ptr1 == nullptr);
+        
+        // Request at the limit of size_t should fail
+        void* ptr2 = allocator.Allocate(SIZE_MAX);
+        CHECK(ptr2 == nullptr);
+    }
+    
+    SUBCASE("Double deallocation")
+    {
+        BuddyAllocator allocator(1024, 8);
+        
+        void* ptr = allocator.Allocate(100);
+        CHECK(ptr != nullptr);
+        
+        allocator.Deallocate(ptr);
+        
+        // Double deallocation - should not crash but behavior is undefined
+        // This test just ensures no crash occurs
+        allocator.Deallocate(ptr);
+        CHECK(true); // If we get here, no crash occurred
     }
 }

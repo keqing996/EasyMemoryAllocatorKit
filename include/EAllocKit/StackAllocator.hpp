@@ -95,9 +95,17 @@ namespace EAllocKit
         size_t requiredUserSize = size;
         
         // Calculate next position address
-        size_t thisFrameStartPos = _pStackTop == nullptr
-            ? thisFrameStartPos = Util::ToAddr(_pData)
-            : Util::ToAddr(_pStackTop) + GetHeaderFromUserPtr(_pStackTop)->size;
+        size_t thisFrameStartPos;
+        if (_pStackTop == nullptr)
+        {
+            thisFrameStartPos = Util::ToAddr(_pData);
+        }
+        else
+        {
+            // Next frame starts after the current top frame's user data
+            StackFrameHeader* currentHeader = GetHeaderFromUserPtr(_pStackTop);
+            thisFrameStartPos = Util::ToAddr(_pStackTop) + currentHeader->size;
+        }
         
         // Calculate aligned user data address
         size_t afterHeaderAddr = thisFrameStartPos + headerSize;

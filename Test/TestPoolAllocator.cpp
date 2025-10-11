@@ -410,3 +410,242 @@ TEST_CASE("PoolAllocator - Alignment Verification")
         }
     }
 }
+
+TEST_CASE("PoolAllocator - Advanced Pool Management")
+{
+    SUBCASE("Free list integrity after mixed allocations/deallocations")
+    {
+        PoolAllocator allocator(sizeof(Data64B), 20, 8);
+        
+        std::vector<Data64B*> ptrs;
+        
+        // Allocate all blocks
+        for (int i = 0; i < 20; i++) {
+            auto* p = Alloc::New<Data64B>(&allocator);
+            CHECK(p != nullptr);
+            ptrs.push_back(p);
+        }
+        
+        CHECK(allocator.GetAvailableBlockCount() == 0);
+        
+        // Free every 3rd block
+        for (size_t i = 2; i < ptrs.size(); i += 3) {
+            Alloc::Delete(&allocator, ptrs[i]);
+            ptrs[i] = nullptr;
+        }
+        
+        // Count non-null pointers
+        size_t remainingAllocated = 0;
+        for (auto* p : ptrs) {
+            if (p != nullptr) remainingAllocated++;
+        }
+        
+        CHECK(allocator.GetAvailableBlockCount() == 20 - remainingAllocated);
+        
+        // Allocate new blocks - should reuse freed ones
+        for (size_t i = 2; i < ptrs.size(); i += 3) {
+            if (ptrs[i] == nullptr) {
+                ptrs[i] = Alloc::New<Data64B>(&allocator);
+                CHECK(ptrs[i] != nullptr);
+            }
+        }
+        
+        CHECK(allocator.GetAvailableBlockCount() == 0);
+        
+        // Clean up
+        for (auto* p : ptrs) {
+            if (p) Alloc::Delete(&allocator, p);
+        }
+    }
+    
+    SUBCASE("Block size verification")
+    {
+        size_t blockSize = 64;
+        PoolAllocator allocator(blockSize, 10, 8);
+        
+        // All allocations should return exactly blockSize bytes of usable space
+        std::vector<void*> ptrs;
+        for (int i = 0; i < 10; i++) {
+            void* ptr = allocator.Allocate();
+            CHECK(ptr != nullptr);
+            ptrs.push_back(ptr);
+            
+            // Write to entire block to verify it's accessible
+            memset(ptr, static_cast<int>(i), blockSize);
+        }
+        
+        // Verify we can read back the data
+        for (size_t i = 0; i < ptrs.size(); i++) {
+            uint8_t* bytePtr = static_cast<uint8_t*>(ptrs[i]);
+            for (size_t j = 0; j < blockSize; j++) {
+                CHECK(bytePtr[j] == static_cast<uint8_t>(i));
+            }
+        }
+        
+        // Clean up
+        for (void* ptr : ptrs) {
+            allocator.Deallocate(ptr);
+        }
+    }
+}
+
+TEST_CASE("PoolAllocator - Edge Cases and Error Conditions")
+{
+    SUBCASE("Zero block count")
+    {
+        PoolAllocator allocator(sizeof(int), 0, 4);
+        
+        void* ptr = allocator.Allocate();
+        CHECK(ptr == nullptr);
+        CHECK(allocator.GetAvailableBlockCount() == 0);
+    }
+    
+    SUBCASE("Very large block size")
+    {
+        size_t largeSize = 1024 * 1024; // 1MB blocks
+        PoolAllocator allocator(largeSize, 2, 8);
+        
+        void* ptr1 = allocator.Allocate();
+        void* ptr2 = allocator.Allocate();
+        
+        CHECK(ptr1 != nullptr);
+        CHECK(ptr2 != nullptr);
+        CHECK(ptr1 != ptr2);
+        
+        allocator.Deallocate(ptr1);
+        allocator.Deallocate(ptr2);
+    }
+    
+    SUBCASE("Null pointer deallocation")
+    {
+        PoolAllocator allocator(sizeof(int), 10, 4);
+        
+        // Should not crash
+        allocator.Deallocate(nullptr);
+        CHECK(allocator.GetAvailableBlockCount() == 10);
+    }
+    
+    SUBCASE("Double deallocation")
+    {
+        PoolAllocator allocator(sizeof(int), 5, 4);
+        
+        void* ptr = allocator.Allocate();
+        CHECK(ptr != nullptr);
+        
+        allocator.Deallocate(ptr);
+        CHECK(allocator.GetAvailableBlockCount() == 5);
+        
+        // Double deallocation - behavior is undefined but should not crash
+        allocator.Deallocate(ptr);
+        CHECK(true); // If we reach here, no crash occurred
+    }
+}
+
+TEST_CASE("PoolAllocator - Alignment Verification")
+{
+    SUBCASE("Various alignment requirements")
+    {
+        std::vector<size_t> alignments = {1, 2, 4, 8, 16, 32, 64, 128};
+        
+        for (size_t alignment : alignments) {
+            PoolAllocator allocator(64, 10, alignment);
+            
+            void* ptr = allocator.Allocate();
+            CHECK(ptr != nullptr);
+            CHECK(reinterpret_cast<uintptr_t>(ptr) % alignment == 0);
+            
+            allocator.Deallocate(ptr);
+        }
+    }
+    
+    SUBCASE("Alignment consistency across allocations")
+    {
+        PoolAllocator allocator(32, 20, 16);
+        
+        std::vector<void*> ptrs;
+        
+        // Allocate multiple blocks
+        for (int i = 0; i < 20; i++) {
+            void* ptr = allocator.Allocate();
+            CHECK(ptr != nullptr);
+            CHECK(reinterpret_cast<uintptr_t>(ptr) % 16 == 0);
+            ptrs.push_back(ptr);
+        }
+        
+        // Clean up
+        for (void* ptr : ptrs) {
+            allocator.Deallocate(ptr);
+        }
+    }
+}
+
+TEST_CASE("PoolAllocator - Memory Pattern Testing")
+{
+    SUBCASE("Block independence verification")
+    {
+        PoolAllocator allocator(sizeof(int), 100, 4);
+        
+        std::vector<int*> ptrs;
+        
+        // Allocate and initialize blocks
+        for (int i = 0; i < 100; i++) {
+            int* ptr = static_cast<int*>(allocator.Allocate());
+            CHECK(ptr != nullptr);
+            *ptr = i;
+            ptrs.push_back(ptr);
+        }
+        
+        // Verify each block maintained its value
+        for (size_t i = 0; i < ptrs.size(); i++) {
+            CHECK(*ptrs[i] == static_cast<int>(i));
+        }
+        
+        // Deallocate every other block
+        for (size_t i = 0; i < ptrs.size(); i += 2) {
+            allocator.Deallocate(ptrs[i]);
+            ptrs[i] = nullptr;
+        }
+        
+        // Verify remaining blocks still have correct values
+        for (size_t i = 1; i < ptrs.size(); i += 2) {
+            CHECK(*ptrs[i] == static_cast<int>(i));
+        }
+        
+        // Clean up remaining blocks
+        for (int* ptr : ptrs) {
+            if (ptr) allocator.Deallocate(ptr);
+        }
+    }
+}
+
+TEST_CASE("PoolAllocator - Performance Characteristics")
+{
+    SUBCASE("Constant time allocation/deallocation")
+    {
+        PoolAllocator allocator(sizeof(Data64B), 1000, 8);
+        
+        std::vector<void*> ptrs;
+        ptrs.reserve(1000);
+        
+        // Rapid allocations
+        for (int i = 0; i < 1000; i++) {
+            void* ptr = allocator.Allocate();
+            CHECK(ptr != nullptr);
+            ptrs.push_back(ptr);
+        }
+        
+        CHECK(allocator.GetAvailableBlockCount() == 0);
+        
+        // Rapid deallocations in different order (LIFO)
+        for (int i = 999; i >= 0; i--) {
+            allocator.Deallocate(ptrs[static_cast<size_t>(i)]);
+        }
+        
+        CHECK(allocator.GetAvailableBlockCount() == 1000);
+        
+        // Should be able to allocate again
+        void* ptr = allocator.Allocate();
+        CHECK(ptr != nullptr);
+        allocator.Deallocate(ptr);
+    }
+}

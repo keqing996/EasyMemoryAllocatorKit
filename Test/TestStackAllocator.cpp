@@ -942,3 +942,234 @@ TEST_CASE("StackAllocator - Non-power-of-2 Alignment Exception")
         allocator.Deallocate();
     }
 }
+
+TEST_CASE("StackAllocator - Advanced Error Handling")
+{
+    SUBCASE("Constructor with non-power-of-2 alignment")
+    {
+        // Constructor should throw for invalid alignments
+        CHECK_THROWS_AS(StackAllocator(1024, 3), std::invalid_argument);
+        CHECK_THROWS_AS(StackAllocator(1024, 5), std::invalid_argument);
+        CHECK_THROWS_AS(StackAllocator(1024, 7), std::invalid_argument);
+        CHECK_THROWS_AS(StackAllocator(1024, 12), std::invalid_argument);
+    }
+    
+    SUBCASE("Out of order deallocation detection")
+    {
+        StackAllocator allocator(1024, 8);
+        
+        void* p1 = allocator.Allocate(64);
+        void* p2 = allocator.Allocate(64);
+        void* p3 = allocator.Allocate(64);
+        
+        CHECK(p1 != nullptr);
+        CHECK(p2 != nullptr);  
+        CHECK(p3 != nullptr);
+        
+        // Try to deallocate out of order - implementation should handle this
+        // The exact behavior depends on implementation but should not crash
+        CHECK(!allocator.IsStackTop(p1));
+        CHECK(!allocator.IsStackTop(p2));
+        CHECK(allocator.IsStackTop(p3));
+        
+        // Proper LIFO deallocation
+        allocator.Deallocate();
+        CHECK(allocator.IsStackTop(p2));
+        
+        allocator.Deallocate();
+        CHECK(allocator.IsStackTop(p1));
+        
+        allocator.Deallocate();
+        CHECK(allocator.GetStackTop() == nullptr);
+    }
+    
+    SUBCASE("Excessive deallocation")
+    {
+        StackAllocator allocator(512, 8);
+        
+        void* p = allocator.Allocate(100);
+        CHECK(p != nullptr);
+        
+        allocator.Deallocate();
+        CHECK(allocator.GetStackTop() == nullptr);
+        
+        // Try to deallocate when stack is empty - should not crash
+        allocator.Deallocate();
+        CHECK(allocator.GetStackTop() == nullptr);
+    }
+}
+
+TEST_CASE("StackAllocator - Memory Boundary Testing")
+{
+    SUBCASE("Fill to capacity")
+    {
+        StackAllocator allocator(256, 8);
+        
+        std::vector<void*> ptrs;
+        
+        // Allocate until we can't allocate anymore
+        while (true) {
+            void* ptr = allocator.Allocate(32);
+            if (!ptr) break;
+            ptrs.push_back(ptr);
+        }
+        
+        CHECK(ptrs.size() > 0);
+        
+        // Try to allocate more - may or may not succeed depending on remaining space
+        void* mayFail = allocator.Allocate(1);
+        bool couldAllocateMore = (mayFail != nullptr);
+        if (couldAllocateMore) {
+            ptrs.push_back(mayFail);
+        }
+        
+        // Now try a larger allocation that should definitely fail
+        void* shouldFail = allocator.Allocate(100);
+        CHECK(shouldFail == nullptr);
+        
+        // Deallocate all in LIFO order
+        for (size_t i = ptrs.size(); i > 0; i--) {
+            allocator.Deallocate();
+        }
+        
+        CHECK(allocator.GetStackTop() == nullptr);
+        
+        // Should be able to allocate again
+        void* afterCleanup = allocator.Allocate(100);
+        CHECK(afterCleanup != nullptr);
+        allocator.Deallocate();
+    }
+    
+    SUBCASE("Large single allocation")
+    {
+        StackAllocator allocator(1024, 8);
+        
+        // Try to allocate most of the space
+        void* largePtr = allocator.Allocate(900);
+        if (largePtr) {
+            CHECK(allocator.IsStackTop(largePtr));
+            
+            // Small allocation should fail
+            void* smallPtr = allocator.Allocate(200);
+            CHECK(smallPtr == nullptr);
+            
+            allocator.Deallocate();
+            
+            // After deallocation, should be able to allocate again
+            void* afterPtr = allocator.Allocate(100);
+            CHECK(afterPtr != nullptr);
+            allocator.Deallocate();
+        }
+    }
+}
+
+TEST_CASE("StackAllocator - Performance and Stress Testing")
+{
+    SUBCASE("Rapid allocation/deallocation cycles")
+    {
+        StackAllocator allocator(8192, 8);
+        
+        // Perform many allocation/deallocation cycles
+        for (int cycle = 0; cycle < 100; cycle++) {
+            std::vector<void*> ptrs;
+            
+            // Allocate multiple blocks
+            for (int i = 0; i < 20; i++) {
+                void* ptr = allocator.Allocate(32 + (i % 64));
+                if (ptr) {
+                    ptrs.push_back(ptr);
+                }
+            }
+            
+            // Deallocate all in LIFO order
+            while (!ptrs.empty()) {
+                allocator.Deallocate();
+                ptrs.pop_back();
+            }
+            
+            CHECK(allocator.GetStackTop() == nullptr);
+        }
+    }
+    
+    SUBCASE("Deep stack nesting")
+    {
+        StackAllocator allocator(4096, 8);
+        
+        const int maxDepth = 100;
+        std::vector<void*> stackPtrs;
+        
+        // Build deep stack
+        for (int i = 0; i < maxDepth; i++) {
+            void* ptr = allocator.Allocate(16 + (i % 32));
+            if (!ptr) break; // Stop if out of memory
+            stackPtrs.push_back(ptr);
+        }
+        
+        CHECK(stackPtrs.size() > 0);
+        
+        // Verify stack top is correct
+        if (!stackPtrs.empty()) {
+            CHECK(allocator.IsStackTop(stackPtrs.back()));
+        }
+        
+        // Unwind stack
+        while (!stackPtrs.empty()) {
+            CHECK(allocator.IsStackTop(stackPtrs.back()));
+            allocator.Deallocate();
+            stackPtrs.pop_back();
+        }
+        
+        CHECK(allocator.GetStackTop() == nullptr);
+    }
+}
+
+TEST_CASE("StackAllocator - Data Integrity Testing")
+{
+    SUBCASE("Memory isolation between allocations")
+    {
+        StackAllocator allocator(2048, 8);
+        
+        struct TestData {
+            uint64_t pattern;
+            uint32_t id;
+            uint8_t buffer[32];
+        };
+        
+        std::vector<TestData*> dataBlocks;
+        
+        // Allocate and initialize multiple data blocks
+        for (int i = 0; i < 10; i++) {
+            void* memory = allocator.Allocate(sizeof(TestData));
+            CHECK(memory != nullptr);
+            
+            TestData* data = new (memory) TestData();
+            data->pattern = 0xDEADBEEF00000000ULL | i;
+            data->id = static_cast<uint32_t>(i);
+            
+            // Fill buffer with pattern
+            for (int j = 0; j < 32; j++) {
+                data->buffer[j] = static_cast<uint8_t>((i * 13 + j) & 0xFF);
+            }
+            
+            dataBlocks.push_back(data);
+        }
+        
+        // Verify all data is intact
+        for (size_t i = 0; i < dataBlocks.size(); i++) {
+            TestData* data = dataBlocks[i];
+            CHECK(data->pattern == (0xDEADBEEF00000000ULL | i));
+            CHECK(data->id == i);
+            
+            for (int j = 0; j < 32; j++) {
+                uint8_t expected = static_cast<uint8_t>((i * 13 + j) & 0xFF);
+                CHECK(data->buffer[j] == expected);
+            }
+        }
+        
+        // Deallocate in LIFO order
+        for (size_t i = dataBlocks.size(); i > 0; i--) {
+            dataBlocks[i-1]->~TestData();
+            allocator.Deallocate();
+        }
+    }
+}
