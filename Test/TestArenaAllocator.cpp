@@ -353,13 +353,13 @@ TEST_CASE("ArenaAllocator Memory Information and Statistics")
     }
     
     SUBCASE("Base and current pointer access") {
-        void* base = arena.GetBaseAddress();
-        void* current_initial = arena.GetCurrentPointer();
+        void* base = arena.GetMemoryBlockPtr();
+        void* current_initial = arena.GetCurrentPtr();
         
         CHECK(base == current_initial); // Initially same
         
         void* ptr = arena.Allocate(100);
-        void* current_after = arena.GetCurrentPointer();
+        void* current_after = arena.GetCurrentPtr();
         
         CHECK(current_after != current_initial);
         CHECK(current_after > base);

@@ -29,7 +29,7 @@ if (ENABLE_EALLOCKIT_TEST)
     create_eallockit_test (eallockit_test_memory_slab_allocator        ${CMAKE_CURRENT_SOURCE_DIR}/test/TestSlabAllocator.cpp)
     create_eallockit_test (eallockit_test_memory_ring_buffer_allocator ${CMAKE_CURRENT_SOURCE_DIR}/test/TestRingBufferAllocator.cpp)
     create_eallockit_test (eallockit_test_memory_thread_caching_allocator ${CMAKE_CURRENT_SOURCE_DIR}/test/TestThreadCachingAllocator.cpp)
-    # create_eallockit_test (eallockit_test_memory_frame_allocator       ${CMAKE_CURRENT_SOURCE_DIR}/test/TestFrameAllocator.cpp)
+    create_eallockit_test (eallockit_test_memory_frame_allocator       ${CMAKE_CURRENT_SOURCE_DIR}/test/TestFrameAllocator.cpp)
     create_eallockit_test (eallockit_test_arena_allocator              ${CMAKE_CURRENT_SOURCE_DIR}/test/TestArenaAllocator.cpp)
 
 endif ()
