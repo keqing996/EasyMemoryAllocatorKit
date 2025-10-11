@@ -33,7 +33,7 @@ namespace EAllocKit
         
         size_t GetCapacity() const { return _size; }
         size_t GetUsedSpace() const;
-        size_t GetFreeSpace() const;
+        size_t GetAvailableSpace() const;
         void* GetMemoryBlockPtr() const { return _pData; }
         
     private:
@@ -101,7 +101,7 @@ namespace EAllocKit
         size_t totalSize = sizeof(AllocationHeader) + alignmentPadding + alignedSize;
         
         // Check if we have enough space
-        if (totalSize > GetFreeSpace())
+        if (totalSize > GetAvailableSpace())
             return nullptr;
         
         // Check if we need to wrap around
@@ -188,7 +188,7 @@ namespace EAllocKit
             return _size - _readPtr + _writePtr;
     }
     
-    inline size_t RingBufferAllocator::GetFreeSpace() const
+    inline size_t RingBufferAllocator::GetAvailableSpace() const
     {
         return _size - GetUsedSpace();
     }
