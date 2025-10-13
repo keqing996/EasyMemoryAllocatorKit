@@ -397,13 +397,13 @@ TEST_CASE("RingBufferAllocator - Memory Statistics")
         RingBufferAllocator allocator(1000, 8);
         
         CHECK(allocator.GetUsedSpace() == 0);
-        CHECK(allocator.GetFreeSpace() == allocator.GetCapacity());
+        CHECK(allocator.GetAvailableSpace() == allocator.GetCapacity());
         
         void* ptr1 = allocator.Allocate(100);
         CHECK(ptr1 != nullptr);
         
         size_t used1 = allocator.GetUsedSpace();
-        size_t free1 = allocator.GetFreeSpace();
+        size_t free1 = allocator.GetAvailableSpace();
         CHECK(used1 > 0);
         CHECK(used1 + free1 == allocator.GetCapacity());
         
@@ -411,21 +411,21 @@ TEST_CASE("RingBufferAllocator - Memory Statistics")
         CHECK(ptr2 != nullptr);
         
         size_t used2 = allocator.GetUsedSpace();
-        size_t free2 = allocator.GetFreeSpace();
+        size_t free2 = allocator.GetAvailableSpace();
         CHECK(used2 > used1);
         CHECK(used2 + free2 == allocator.GetCapacity());
         
         allocator.DeallocateNext();
         
         size_t used3 = allocator.GetUsedSpace();
-        size_t free3 = allocator.GetFreeSpace();
+        size_t free3 = allocator.GetAvailableSpace();
         CHECK(used3 < used2);
         CHECK(used3 + free3 == allocator.GetCapacity());
         
         allocator.DeallocateNext();
         
         CHECK(allocator.GetUsedSpace() == 0);
-        CHECK(allocator.GetFreeSpace() == allocator.GetCapacity());
+        CHECK(allocator.GetAvailableSpace() == allocator.GetCapacity());
     }
     
     SUBCASE("Capacity verification")

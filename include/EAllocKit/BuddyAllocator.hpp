@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -52,7 +53,7 @@ namespace EAllocKit
         size_t _size;                      // Total size (power of 2)
         size_t _maxOrder;                  // Maximum order based on size
         size_t _defaultAlignment;          // Default alignment
-        FreeBlock* _freeLists[MAX_ORDER]{};  // Free lists for each order
+        std::array<FreeBlock*, MAX_ORDER> _freeLists{};  // Free lists for each order
         uint8_t* _blockStatus;             // Bitmap for block allocation status
         size_t _bitmapSize;                // Size of bitmap in bytes
     };
@@ -79,7 +80,7 @@ namespace EAllocKit
             _maxOrder = MAX_ORDER;
         
         // Initialize free lists
-        std::memset(_freeLists, 0, sizeof(_freeLists));
+        _freeLists.fill(nullptr);
         
         // Calculate bitmap size (one bit per minimum-sized block)
         size_t numMinBlocks = _size / MIN_BLOCK_SIZE;

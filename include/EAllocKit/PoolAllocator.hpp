@@ -109,7 +109,7 @@ namespace EAllocKit
     inline void PoolAllocator::Deallocate(void* p)
     {
         if (p == nullptr)
-            return; // Safe to deallocate nullptr, like free()
+            return; 
             
         // Retrieve distance to find the node header (like FreeListAllocator)
         uint32_t* pDistanceStorage = reinterpret_cast<uint32_t*>(static_cast<char*>(p) - 4);
