@@ -9,8 +9,6 @@ function(create_eallockit_test test_name source_file)
 endfunction()
 
 if (ENABLE_EALLOCKIT_TEST)
-    enable_testing()
-
     create_eallockit_test (eallockit_test_memory_util                  ${CMAKE_CURRENT_SOURCE_DIR}/test/TestMemoryAllocatorUtil.cpp)
     create_eallockit_test (eallockit_test_memory_linear_allocator      ${CMAKE_CURRENT_SOURCE_DIR}/test/TestLinearAllocator.cpp)
     create_eallockit_test (eallockit_test_memory_free_list_allocator   ${CMAKE_CURRENT_SOURCE_DIR}/test/TestFreeListAllocator.cpp)
