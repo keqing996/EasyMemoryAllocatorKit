@@ -648,6 +648,234 @@ TEST_CASE("ThreadCachingAllocator Type Safety")
     }
 }
 
+TEST_CASE("ThreadCachingAllocator Direct Malloc Allocations")
+{
+    ThreadCachingAllocator allocator;
+    
+    SUBCASE("Large allocation boundaries")
+    {
+        // Test sizes around the 4KB boundary that triggers direct malloc
+        std::vector<size_t> testSizes = {
+            4096,        // Boundary - should still use pooled LARGE class
+            4097,        // Just over boundary - should use DIRECT
+            5000, 6000, 8192, 10000, 16384, 32768, 65536, 100000, 1024*1024
+        };
+        
+        for (size_t size : testSizes)
+        {
+            INFO("Testing direct allocation of size: " << size);
+            
+            void* ptr = allocator.Allocate(size);
+            CHECK(ptr != nullptr);
+            
+            // Verify we can write to the full allocated size
+            // For direct allocations, we should get exactly what we asked for
+            if (size > 4096)  // Direct allocations
+            {
+                std::memset(ptr, 0xDD, size);
+                
+                // Verify the data was written correctly
+                char* charPtr = static_cast<char*>(ptr);
+                CHECK(charPtr[0] == static_cast<char>(0xDD));
+                CHECK(charPtr[size-1] == static_cast<char>(0xDD));
+            }
+            else  // Pooled allocations
+            {
+                // For pooled allocations, only write up to the pooled size (4KB)
+                std::memset(ptr, 0xDD, 4096);
+            }
+            
+            allocator.Deallocate(ptr);
+        }
+    }
+    
+    SUBCASE("Direct allocation alignment")
+    {
+        // Test alignment for direct allocations
+        std::vector<size_t> sizes = {5000, 8192, 16384, 100000};
+        std::vector<size_t> alignments = {1, 2, 4, 8, 16, 32, 64};
+        
+        for (size_t size : sizes)
+        {
+            for (size_t alignment : alignments)
+            {
+                INFO("Testing direct allocation size " << size << " with alignment " << alignment);
+                
+                void* ptr = allocator.Allocate(size, alignment);
+                CHECK(ptr != nullptr);
+                
+                // Check alignment
+                uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
+                CHECK((addr % alignment) == 0);
+                
+                // Verify we can write to the memory
+                std::memset(ptr, 0xEE, std::min(size, size_t(1000)));
+                
+                allocator.Deallocate(ptr);
+            }
+        }
+    }
+    
+    SUBCASE("Direct allocation pattern verification")
+    {
+        // Allocate multiple large blocks and verify they're properly managed
+        const size_t blockSize = 50000;  // Definitely direct allocation
+        const int numBlocks = 20;
+        
+        std::vector<void*> ptrs;
+        ptrs.reserve(numBlocks);
+        
+        // Allocate blocks
+        for (int i = 0; i < numBlocks; ++i)
+        {
+            void* ptr = allocator.Allocate(blockSize);
+            CHECK(ptr != nullptr);
+            ptrs.push_back(ptr);
+            
+            // Write unique pattern to each block
+            uint32_t* intPtr = static_cast<uint32_t*>(ptr);
+            for (size_t j = 0; j < blockSize / sizeof(uint32_t); ++j)
+            {
+                intPtr[j] = static_cast<uint32_t>(i * 1000 + j);
+            }
+        }
+        
+        // Verify patterns are intact
+        for (int i = 0; i < numBlocks; ++i)
+        {
+            uint32_t* intPtr = static_cast<uint32_t*>(ptrs[i]);
+            for (size_t j = 0; j < 100; ++j)  // Check first 100 integers
+            {
+                CHECK(intPtr[j] == static_cast<uint32_t>(i * 1000 + j));
+            }
+        }
+        
+        // Deallocate in random order
+        std::random_device rd;
+        std::mt19937 g(rd());
+        std::shuffle(ptrs.begin(), ptrs.end(), g);
+        
+        for (void* ptr : ptrs)
+        {
+            allocator.Deallocate(ptr);
+        }
+    }
+    
+    SUBCASE("Mixed pooled and direct allocations")
+    {
+        // Mix small pooled allocations with large direct allocations
+        std::vector<std::pair<void*, size_t>> allocations;
+        
+        // Mix of sizes - some pooled, some direct
+        std::vector<size_t> sizes = {
+            100, 500, 1000, 2000, 4000,     // Pooled allocations
+            5000, 8192, 20000, 100000       // Direct allocations  
+        };
+        
+        // Allocate in mixed pattern
+        for (int round = 0; round < 3; ++round)
+        {
+            for (size_t size : sizes)
+            {
+                void* ptr = allocator.Allocate(size);
+                CHECK(ptr != nullptr);
+                allocations.push_back({ptr, size});
+                
+                // Write pattern based on size
+                char pattern = static_cast<char>(size % 256);
+                std::memset(ptr, pattern, std::min(size, size_t(1000)));
+            }
+        }
+        
+        // Verify all allocations are valid
+        for (const auto& alloc : allocations)
+        {
+            char* ptr = static_cast<char*>(alloc.first);
+            char expectedPattern = static_cast<char>(alloc.second % 256);
+            
+            // Check first and some middle bytes
+            CHECK(ptr[0] == expectedPattern);
+            if (alloc.second > 500)
+            {
+                CHECK(ptr[500] == expectedPattern);
+            }
+        }
+        
+        // Deallocate all
+        for (const auto& alloc : allocations)
+        {
+            allocator.Deallocate(alloc.first);
+        }
+    }
+    
+    SUBCASE("Direct allocation multithreading")
+    {
+        std::atomic<int> errors{0};
+        const int numThreads = 8;
+        const int allocsPerThread = 25;
+        
+        std::vector<std::thread> threads;
+        
+        for (int t = 0; t < numThreads; ++t)
+        {
+            threads.emplace_back([&, t]()
+            {
+                std::vector<void*> ptrs;
+                ptrs.reserve(allocsPerThread);
+                
+                // Each thread allocates large blocks (direct allocations)
+                for (int i = 0; i < allocsPerThread; ++i)
+                {
+                    size_t size = 10000 + (t * 1000) + (i * 100);  // 10KB+ blocks
+                    void* ptr = allocator.Allocate(size);
+                    
+                    if (!ptr)
+                    {
+                        errors.fetch_add(1);
+                        continue;
+                    }
+                    
+                    ptrs.push_back(ptr);
+                    
+                    // Write thread-specific pattern
+                    uint32_t pattern = (t << 16) | i;
+                    uint32_t* intPtr = static_cast<uint32_t*>(ptr);
+                    for (size_t j = 0; j < std::min(size / sizeof(uint32_t), size_t(100)); ++j)
+                    {
+                        intPtr[j] = pattern;
+                    }
+                }
+                
+                // Verify patterns
+                for (size_t i = 0; i < ptrs.size(); ++i)
+                {
+                    uint32_t expectedPattern = (t << 16) | static_cast<uint32_t>(i);
+                    uint32_t* intPtr = static_cast<uint32_t*>(ptrs[i]);
+                    
+                    if (intPtr[0] != expectedPattern || intPtr[50] != expectedPattern)
+                    {
+                        errors.fetch_add(1);
+                    }
+                }
+                
+                // Deallocate all
+                for (void* ptr : ptrs)
+                {
+                    allocator.Deallocate(ptr);
+                }
+            });
+        }
+        
+        // Wait for all threads to complete
+        for (auto& thread : threads)
+        {
+            thread.join();
+        }
+        
+        CHECK(errors.load() == 0);
+    }
+}
+
 TEST_CASE("ThreadCachingAllocator Multiple Instances")
 {
     SUBCASE("Independent allocator instances")

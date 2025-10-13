@@ -79,10 +79,11 @@ namespace EAllocKit
         {
             SMALL = 0,   // 1-128B: pointers, basic objects, small strings
             MEDIUM = 1,  // 129-1024B: composite objects, medium buffers
-            LARGE = 2,   // >1KB: large buffers, still pooled
-            COUNT = 3    // Total number of size classes
+            LARGE = 2,   // >1KB but <=4KB: large buffers, still pooled
+            DIRECT = 3,  // >4KB: directly allocated via malloc
+            COUNT = 4    // Total number of size classes
         };
-
+        
         // Free list node for linking freed objects
         struct FreeListNode
         {
@@ -92,7 +93,7 @@ namespace EAllocKit
         // Allocation header to store size information
         struct AllocationHeader
         {
-            uint32_t sizeClass;
+            uint32_t sizeClass;      // Size class, or special value for direct malloc
         };
         
         // Extracted constants as constexpr parameters
@@ -106,6 +107,9 @@ namespace EAllocKit
         static constexpr size_t kMaxLargeObjects = 16;        // 16 * varies = flexible
         static constexpr size_t kDefaultAlignment = 8;
         static constexpr size_t kPageSize = 4096;
+        
+        // Special marker for directly allocated objects
+        static constexpr uint32_t DIRECT_ALLOC_MARKER = 0xFFFFFFFF;
 
         // Central free list manages global memory blocks for each size class
         class CentralFreeList
@@ -129,7 +133,7 @@ namespace EAllocKit
             std::mutex _mutex;
             FreeListNode* _freeList = nullptr;
             size_t _objectSize;
-            size_t _objectsPerSpan;
+            size_t _objectsPerPage;
             Page* _pages = nullptr;
             
             void AllocatePage();
@@ -210,7 +214,7 @@ namespace EAllocKit
 
     inline ThreadCachingAllocator::CentralFreeList::CentralFreeList(size_t objectSize)
         : _objectSize(objectSize)
-        , _objectsPerSpan(std::max(size_t(1), (4096 / objectSize))) // At least 4KB per span
+        , _objectsPerPage(std::max(size_t(1), (kPageSize / objectSize)))
     {
     }
 
@@ -259,7 +263,7 @@ namespace EAllocKit
 
     inline void ThreadCachingAllocator::CentralFreeList::AllocatePage()
     {
-        size_t spanSize = _objectSize * _objectsPerSpan;
+        size_t spanSize = _objectSize * _objectsPerPage;
         
         void* memory = ::malloc(spanSize);
         if (!memory) 
@@ -321,7 +325,6 @@ namespace EAllocKit
 
     inline void* ThreadCachingAllocator::ThreadLocalCache::Allocate(ObjectSize sizeClass)
     {
-        
         FreeList& freeList = _freeLists[static_cast<size_t>(sizeClass)];
         
         if (!freeList.head)
@@ -371,7 +374,7 @@ namespace EAllocKit
 
     inline void ThreadCachingAllocator::ThreadLocalCache::FetchFromCentral(ObjectSize sizeClass)
     {
-        auto& centralList = *_owner->_centralFreeLists[static_cast<size_t>(sizeClass)];
+        auto& pCentralList = _owner->_centralFreeLists[static_cast<size_t>(sizeClass)];
         
         size_t fetchCount = std::min(_freeLists[static_cast<size_t>(sizeClass)].maxCount / 2, size_t(32));
         
@@ -381,7 +384,7 @@ namespace EAllocKit
         // Allocate objects one by one and build a linked list
         for (size_t i = 0; i < fetchCount; ++i)
         {
-            void* ptr = centralList.Allocate();
+            void* ptr = pCentralList->Allocate();
             if (!ptr) break;
             
             FreeListNode* node = static_cast<FreeListNode*>(ptr);
@@ -485,7 +488,6 @@ namespace EAllocKit
 
     inline ThreadCachingAllocator::ThreadCachingAllocator()
     {
-        // Initialize central free lists for 3 size classes
         _centralFreeLists[static_cast<size_t>(ObjectSize::SMALL)] = std::make_unique<CentralFreeList>(GetClassSize(ObjectSize::SMALL));
         _centralFreeLists[static_cast<size_t>(ObjectSize::MEDIUM)] = std::make_unique<CentralFreeList>(GetClassSize(ObjectSize::MEDIUM));
         _centralFreeLists[static_cast<size_t>(ObjectSize::LARGE)] = std::make_unique<CentralFreeList>(GetClassSize(ObjectSize::LARGE));
@@ -505,7 +507,6 @@ namespace EAllocKit
 
     inline ThreadCachingAllocator::ThreadLocalCache* ThreadCachingAllocator::GetThreadCache()
     {
-        // Fast TLS access - no locks needed!
         ThreadLocalCache* cache = static_cast<ThreadLocalCache*>(tls_get_value(_tlsKey));
         
         if (!cache)
@@ -546,15 +547,28 @@ namespace EAllocKit
         size_t minimalSpaceNeeded = headerSize + distanceSize + size + alignment - 1;
         
         ObjectSize sizeClass = GetSizeClass(minimalSpaceNeeded);
-        ThreadLocalCache* cache = GetThreadCache();
         
-        void* rawPtr = cache->Allocate(sizeClass);
-        if (!rawPtr)
+        void* rawPtr = nullptr;
+        if (sizeClass == ObjectSize::DIRECT)
         {
-            // Fallback to central allocator
-            rawPtr = _centralFreeLists[static_cast<size_t>(sizeClass)]->Allocate();
+            // For very large allocations, use direct malloc
+            rawPtr = ::malloc(minimalSpaceNeeded);
             if (!rawPtr)
                 return nullptr;
+        }
+        else
+        {
+            // Use cached allocation for smaller objects
+            ThreadLocalCache* cache = GetThreadCache();
+            
+            rawPtr = cache->Allocate(sizeClass);
+            if (!rawPtr)
+            {
+                // Fallback to central allocator
+                rawPtr = _centralFreeLists[static_cast<size_t>(sizeClass)]->Allocate();
+                if (!rawPtr)
+                    return nullptr;
+            }
         }
         
         // Calculate aligned user address
@@ -565,7 +579,10 @@ namespace EAllocKit
         
         // Store allocation header at the beginning
         AllocationHeader* header = static_cast<AllocationHeader*>(rawPtr);
-        header->sizeClass = static_cast<uint32_t>(sizeClass);
+        if (sizeClass == ObjectSize::DIRECT) 
+            header->sizeClass = DIRECT_ALLOC_MARKER;
+        else 
+            header->sizeClass = static_cast<uint32_t>(sizeClass);
         
         // Store distance from user pointer back to header
         void* alignedUserPtr = reinterpret_cast<void*>(alignedUserAddr);
@@ -584,7 +601,10 @@ namespace EAllocKit
         // Get allocation header to retrieve size information
         AllocationHeader* header = GetAllocationHeader(ptr);
         
-        GetThreadCache()->Deallocate(header, static_cast<ObjectSize>(header->sizeClass));
+        if (header->sizeClass == DIRECT_ALLOC_MARKER)
+            ::free(header);
+        else
+            GetThreadCache()->Deallocate(header, static_cast<ObjectSize>(header->sizeClass));
     }
 
     inline size_t ThreadCachingAllocator::GetThreadCacheSize() const
@@ -599,7 +619,9 @@ namespace EAllocKit
             return ObjectSize::SMALL;
         if (size <= kMediumThreshold) 
             return ObjectSize::MEDIUM;
-        return ObjectSize::LARGE;
+        if (size <= kMediumThreshold * 4) 
+            return ObjectSize::LARGE;
+        return ObjectSize::DIRECT;
     }
     
     inline size_t ThreadCachingAllocator::GetClassSize(ObjectSize sizeClass)
@@ -609,6 +631,7 @@ namespace EAllocKit
             case ObjectSize::SMALL:  return kSmallThreshold;   // Always allocate 128B for small
             case ObjectSize::MEDIUM: return kMediumThreshold;  // Always allocate 1KB for medium
             case ObjectSize::LARGE:  return kMediumThreshold * 4;  // Use 4KB blocks for large objects
+            case ObjectSize::DIRECT: return 0;  // Direct allocations don't use fixed size
             default:                 return kMediumThreshold;
         }
     }
