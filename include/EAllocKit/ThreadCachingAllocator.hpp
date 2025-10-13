@@ -88,6 +88,12 @@ namespace EAllocKit
         {
             FreeListNode* next = nullptr;
         };
+
+        // Allocation header to store size information
+        struct AllocationHeader
+        {
+            uint32_t sizeClass;
+        };
         
         // Extracted constants as constexpr parameters
         static constexpr size_t kSmallThreshold = 128;        // 128B
@@ -118,8 +124,6 @@ namespace EAllocKit
 
             void* Allocate();
             void Deallocate(void* ptr);
-            std::pair<FreeListNode*, size_t> AllocateObjects(size_t maxObjects);
-            void DeallocateObjects(FreeListNode* objects, size_t count);
 
         private:
             std::mutex _mutex;
@@ -185,7 +189,6 @@ namespace EAllocKit
         void* Allocate(size_t size);
         void* Allocate(size_t size, size_t alignment);
         void Deallocate(void* ptr);
-        void Deallocate(void* ptr, size_t size);
 
         // Statistics and debugging
         size_t GetThreadCacheSize() const;
@@ -198,9 +201,11 @@ namespace EAllocKit
         tls_key_t _tlsKey;
         
         ThreadLocalCache* GetThreadCache();
-        ObjectSize GetSizeClass(size_t size) const;
-        size_t GetClassSize(ObjectSize sizeClass) const;
-        size_t GetMaxObjectCount(ObjectSize sizeClass) const;
+        static ObjectSize GetSizeClass(size_t size);
+        static size_t GetClassSize(ObjectSize sizeClass);
+        static size_t GetMaxObjectCount(ObjectSize sizeClass);
+        
+        static AllocationHeader* GetAllocationHeader(void* userPtr);
     };
 
     inline ThreadCachingAllocator::CentralFreeList::CentralFreeList(size_t objectSize)
@@ -224,69 +229,32 @@ namespace EAllocKit
         }
     }
 
-    inline std::pair<ThreadCachingAllocator::FreeListNode*, size_t> 
-    ThreadCachingAllocator::CentralFreeList::AllocateObjects(size_t maxObjects)
-    {
-        std::lock_guard<std::mutex> lock(_mutex);
-        
-        size_t allocated = 0;
-        FreeListNode* head = nullptr;
-        
-        while (allocated < maxObjects)
-        {
-            FreeListNode* node = _freeList;
-            if (!node)
-            {
-                AllocatePage();
-                node = _freeList;
-                if (!node) 
-                    break;
-            }
-            
-            FreeListNode* next = node->next;
-            _freeList = next;
-            
-            node->next = head;
-            head = node;
-            allocated++;
-        }
-        
-        return { head, allocated };
-    }
-
-    inline void ThreadCachingAllocator::CentralFreeList::DeallocateObjects(FreeListNode* objects, size_t count)
-    {
-        if (!objects) 
-            return;
-        
-        std::lock_guard<std::mutex> lock(_mutex);
-        
-        FreeListNode* tail = objects;
-        for (size_t i = 1; i < count && tail->next; ++i)
-            tail = tail->next;
-        
-        tail->next = _freeList;
-
-        _freeList = objects;
-    }
-
     inline void* ThreadCachingAllocator::CentralFreeList::Allocate()
     {
-        FreeListNode* result = nullptr;
-
-        auto [nodes, count] = AllocateObjects(1);
-        if (count > 0)
-            return nodes;
-
-        return nullptr;
+        std::lock_guard<std::mutex> lock(_mutex);
+        
+        if (!_freeList)
+        {
+            AllocatePage();
+            if (!_freeList) 
+                return nullptr;
+        }
+        
+        FreeListNode* result = _freeList;
+        _freeList = result->next;
+        
+        return result;
     }
 
     inline void ThreadCachingAllocator::CentralFreeList::Deallocate(void* ptr)
     {
         if (!ptr) return;
         
+        std::lock_guard<std::mutex> lock(_mutex);
+        
         FreeListNode* node = static_cast<FreeListNode*>(ptr);
-        DeallocateObjects(node, 1);
+        node->next = _freeList;
+        _freeList = node;
     }
 
     inline void ThreadCachingAllocator::CentralFreeList::AllocatePage()
@@ -406,10 +374,25 @@ namespace EAllocKit
         auto& centralList = *_owner->_centralFreeLists[static_cast<size_t>(sizeClass)];
         
         size_t fetchCount = std::min(_freeLists[static_cast<size_t>(sizeClass)].maxCount / 2, size_t(32));
-        auto [objects, actualCount] = centralList.AllocateObjects(fetchCount);
+        
+        FreeListNode* head = nullptr;
+        size_t actualCount = 0;
+        
+        // Allocate objects one by one and build a linked list
+        for (size_t i = 0; i < fetchCount; ++i)
+        {
+            void* ptr = centralList.Allocate();
+            if (!ptr) break;
+            
+            FreeListNode* node = static_cast<FreeListNode*>(ptr);
+            node->next = head;
+            head = node;
+            actualCount++;
+        }
+        
         if (actualCount > 0)
         {
-            _freeLists[static_cast<size_t>(sizeClass)].head = objects;
+            _freeLists[static_cast<size_t>(sizeClass)].head = head;
             _freeLists[static_cast<size_t>(sizeClass)].count = actualCount;
             
             size_t classSize = _owner->GetClassSize(sizeClass);
@@ -425,7 +408,14 @@ namespace EAllocKit
         
         auto& centralList = *_owner->_centralFreeLists[static_cast<size_t>(sizeClass)];
         
-        centralList.DeallocateObjects(freeList.head, freeList.count);
+        // Deallocate objects one by one
+        FreeListNode* current = freeList.head;
+        while (current)
+        {
+            FreeListNode* next = current->next;
+            centralList.Deallocate(current);
+            current = next;
+        }
         
         size_t classSize = _owner->GetClassSize(sizeClass);
         _totalCacheSize -= classSize * freeList.count;
@@ -466,7 +456,15 @@ namespace EAllocKit
                     keepTail->next = nullptr;
                     
                     auto& centralList = *_owner->_centralFreeLists[static_cast<size_t>(sizeClass)];
-                    centralList.DeallocateObjects(freeList.head, returnCount);
+                    
+                    // Deallocate objects one by one
+                    FreeListNode* current = freeList.head;
+                    for (size_t i = 0; i < returnCount && current; ++i)
+                    {
+                        FreeListNode* next = current->next;
+                        centralList.Deallocate(current);
+                        current = next;
+                    }
                     
                     freeList.head = returnHead;
                     freeList.count -= returnCount;
@@ -531,57 +529,62 @@ namespace EAllocKit
 
     inline void* ThreadCachingAllocator::Allocate(size_t size, size_t alignment)
     {
-        if (size == 0) return nullptr;
+        if (size == 0) 
+            return nullptr;
         
         if (!Util::IsPowerOfTwo(alignment))
             throw std::invalid_argument("ThreadCachingAllocator only supports power-of-2 alignments");
         
-        // Store original size for clearing
+        // Store original size
         size_t originalSize = size;
         
-        // Align size to requested alignment
-        size = Util::UpAlignment(size, alignment);
+        // Calculate aligned user data address using FreeListAllocator's layout
+        const size_t headerSize = sizeof(AllocationHeader);
+        const size_t distanceSize = 4; // 4 bytes to store distance from user pointer to header
         
-        ObjectSize sizeClass = GetSizeClass(size);
+        // Calculate minimum space needed: header + distance + user data + extra for alignment
+        size_t minimalSpaceNeeded = headerSize + distanceSize + size + alignment - 1;
+        
+        ObjectSize sizeClass = GetSizeClass(minimalSpaceNeeded);
         ThreadLocalCache* cache = GetThreadCache();
         
-        void* result = cache->Allocate(sizeClass);
-        if (result)
+        void* rawPtr = cache->Allocate(sizeClass);
+        if (!rawPtr)
         {
-            // Don't clear memory from cache - it may contain valid FreeListNode data that will be reused
-            // Only clear the user-requested portion, and only if it's safe to do so
-            // For now, we'll skip clearing cached memory to avoid corrupting free list structures
-            return result;
+            // Fallback to central allocator
+            rawPtr = _centralFreeLists[static_cast<size_t>(sizeClass)]->Allocate();
+            if (!rawPtr)
+                return nullptr;
         }
         
-        // Fallback to central allocator
-        result = _centralFreeLists[static_cast<size_t>(sizeClass)]->Allocate();
-        if (result)
-        {
-            // Clear only newly allocated memory from central allocator
-            std::memset(result, 0, originalSize);
-        }
+        // Calculate aligned user address
+        size_t rawAddr = Util::ToAddr(rawPtr);
+        size_t afterHeaderAddr = rawAddr + headerSize;
+        size_t minimalUserAddr = afterHeaderAddr + distanceSize;
+        size_t alignedUserAddr = Util::UpAlignment(minimalUserAddr, alignment);
         
-        return result;
+        // Store allocation header at the beginning
+        AllocationHeader* header = static_cast<AllocationHeader*>(rawPtr);
+        header->sizeClass = static_cast<uint32_t>(sizeClass);
+        
+        // Store distance from user pointer back to header
+        void* alignedUserPtr = reinterpret_cast<void*>(alignedUserAddr);
+        uint32_t distance = static_cast<uint32_t>(alignedUserAddr - rawAddr);
+        uint32_t* distPtr = static_cast<uint32_t*>(Util::PtrOffsetBytes(alignedUserPtr, -4));
+        *distPtr = distance;
+        
+        return alignedUserPtr;
     }
 
     inline void ThreadCachingAllocator::Deallocate(void* ptr)
     {
-        if (!ptr) return;
+        if (!ptr) 
+            return;
         
-        // For simplicity, require size information for proper deallocation
-        // In a real implementation, you'd store metadata about allocation sizes
-        throw std::runtime_error("Deallocate(ptr) requires size information. Use Deallocate(ptr, size)");
-    }
-
-    inline void ThreadCachingAllocator::Deallocate(void* ptr, size_t size)
-    {
-        if (!ptr) return;
+        // Get allocation header to retrieve size information
+        AllocationHeader* header = GetAllocationHeader(ptr);
         
-        ObjectSize sizeClass = GetSizeClass(size);
-        ThreadLocalCache* cache = GetThreadCache();
-        
-        cache->Deallocate(ptr, sizeClass);
+        GetThreadCache()->Deallocate(header, static_cast<ObjectSize>(header->sizeClass));
     }
 
     inline size_t ThreadCachingAllocator::GetThreadCacheSize() const
@@ -590,7 +593,7 @@ namespace EAllocKit
         return cache ? cache->GetCacheSize() : 0;
     }
 
-    inline ThreadCachingAllocator::ObjectSize ThreadCachingAllocator::GetSizeClass(size_t size) const 
+    inline ThreadCachingAllocator::ObjectSize ThreadCachingAllocator::GetSizeClass(size_t size)
     {
         if (size <= kSmallThreshold) 
             return ObjectSize::SMALL;
@@ -599,18 +602,18 @@ namespace EAllocKit
         return ObjectSize::LARGE;
     }
     
-    inline size_t ThreadCachingAllocator::GetClassSize(ObjectSize sizeClass) const 
+    inline size_t ThreadCachingAllocator::GetClassSize(ObjectSize sizeClass)
     {
         switch (sizeClass) 
         {
             case ObjectSize::SMALL:  return kSmallThreshold;   // Always allocate 128B for small
             case ObjectSize::MEDIUM: return kMediumThreshold;  // Always allocate 1KB for medium
-            case ObjectSize::LARGE:  return kMediumThreshold;  // Use 1KB blocks for large objects too
+            case ObjectSize::LARGE:  return kMediumThreshold * 4;  // Use 4KB blocks for large objects
             default:                 return kMediumThreshold;
         }
     }
     
-    inline size_t ThreadCachingAllocator::GetMaxObjectCount(ObjectSize sizeClass) const 
+    inline size_t ThreadCachingAllocator::GetMaxObjectCount(ObjectSize sizeClass)
     {
         switch (sizeClass) 
         {
@@ -619,5 +622,19 @@ namespace EAllocKit
             case ObjectSize::LARGE:  return kMaxLargeObjects;
             default:                 return kMaxLargeObjects;
         }
+    }
+
+    inline ThreadCachingAllocator::AllocationHeader* ThreadCachingAllocator::GetAllocationHeader(void* userPtr)
+    {
+        if (!userPtr) 
+            return nullptr;
+        
+        // Read distance from 4 bytes before user pointer (like FreeListAllocator)
+        uint32_t* distPtr = static_cast<uint32_t*>(Util::PtrOffsetBytes(userPtr, -4));
+        uint32_t distance = *distPtr;
+        
+        // Calculate header address using distance
+        void* headerPtr = Util::PtrOffsetBytes(userPtr, -static_cast<std::ptrdiff_t>(distance));
+        return static_cast<AllocationHeader*>(headerPtr);
     }
 } // namespace EAllocKit

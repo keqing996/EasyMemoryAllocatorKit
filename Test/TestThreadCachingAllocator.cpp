@@ -66,7 +66,7 @@ TEST_CASE("ThreadCachingAllocator Basic Functionality")
         *static_cast<int*>(ptr) = 0xDEADBEEF;
         CHECK(*static_cast<int*>(ptr) == 0xDEADBEEF);
         
-        allocator.Deallocate(ptr, 32);
+        allocator.Deallocate(ptr);
     }
     
     SUBCASE("Multiple small objects")
@@ -95,7 +95,7 @@ TEST_CASE("ThreadCachingAllocator Basic Functionality")
         // Deallocate
         for (void* ptr : ptrs)
         {
-            allocator.Deallocate(ptr, 64);
+            allocator.Deallocate(ptr);
         }
     }
     
@@ -112,7 +112,7 @@ TEST_CASE("ThreadCachingAllocator Basic Functionality")
         CHECK(charPtr[0] == 'A');
         CHECK(charPtr[1023] == 'Z');
         
-        allocator.Deallocate(ptr, 1024);
+        allocator.Deallocate(ptr);
     }
     
     SUBCASE("Large object allocation")
@@ -128,7 +128,7 @@ TEST_CASE("ThreadCachingAllocator Basic Functionality")
         CHECK(charPtr[0] == 'A');
         CHECK(charPtr[1023] == 'Z');
         
-        allocator.Deallocate(ptr, 2048);
+        allocator.Deallocate(ptr);
     }
     
     SUBCASE("Mixed size allocations")
@@ -168,7 +168,7 @@ TEST_CASE("ThreadCachingAllocator Basic Functionality")
         // Deallocate all allocations
         for (auto& [ptr, size] : allocations)
         {
-            allocator.Deallocate(ptr, size);
+            allocator.Deallocate(ptr);
         }
     }
 }
@@ -197,7 +197,7 @@ TEST_CASE("ThreadCachingAllocator Size Classes")
             // Verify we can write to the allocated memory (safely)
             std::memset(ptr, 0xAB, safeWriteSize);
             
-            allocator.Deallocate(ptr, size);
+            allocator.Deallocate(ptr);
         }
     }
     
@@ -215,7 +215,7 @@ TEST_CASE("ThreadCachingAllocator Size Classes")
             uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
             CHECK((addr % alignment) == 0);
             
-            allocator.Deallocate(ptr, 128);
+            allocator.Deallocate(ptr);
         }
     }
 }
@@ -278,7 +278,7 @@ TEST_CASE("ThreadCachingAllocator Multithreading")
                 for (size_t i = 0; i < localPtrs.size(); ++i)
                 {
                     size_t size = 32 + (i % 10) * 8;
-                    allocator.Deallocate(localPtrs[i], size);
+                    allocator.Deallocate(localPtrs[i]);
                 }
             });
         }
@@ -327,7 +327,7 @@ TEST_CASE("ThreadCachingAllocator Multithreading")
                             std::this_thread::sleep_for(std::chrono::microseconds(1));
                         }
                         
-                        allocator.Deallocate(ptr, size);
+                        allocator.Deallocate(ptr);
                         g_deallocCount.fetch_add(1);
                     }
                 }
@@ -361,7 +361,7 @@ TEST_CASE("ThreadCachingAllocator Multithreading")
                     // Deallocate batch
                     for (auto& [ptr, size] : ptrs)
                     {
-                        allocator.Deallocate(ptr, size);
+                        allocator.Deallocate(ptr);
                         g_deallocCount.fetch_add(1);
                     }
                     ptrs.clear();
@@ -413,7 +413,7 @@ TEST_CASE("ThreadCachingAllocator Performance")
                 // Deallocate
                 for (void* ptr : ptrs)
                 {
-                    tcAllocator.Deallocate(ptr, size);
+                    tcAllocator.Deallocate(ptr);
                 }
                 
                 double tcTime = timer.ElapsedMs();
@@ -476,7 +476,7 @@ TEST_CASE("ThreadCachingAllocator Performance")
                 // Deallocate phase
                 for (void* ptr : ptrs)
                 {
-                    tcAllocator.Deallocate(ptr, 64);
+                    tcAllocator.Deallocate(ptr);
                 }
             });
         }
@@ -522,7 +522,7 @@ TEST_CASE("ThreadCachingAllocator Statistics and Debugging")
         // Clean up
         for (auto& [ptr, size] : ptrs)
         {
-            allocator.Deallocate(ptr, size);
+            allocator.Deallocate(ptr);
         }
     }
     
@@ -542,7 +542,7 @@ TEST_CASE("ThreadCachingAllocator Statistics and Debugging")
         // Deallocate (should increase cache)
         for (void* ptr : ptrs)
         {
-            allocator.Deallocate(ptr, 32);
+            allocator.Deallocate(ptr);
         }
         
         size_t newCacheSize = allocator.GetThreadCacheSize();
@@ -564,7 +564,7 @@ TEST_CASE("ThreadCachingAllocator Edge Cases")
     SUBCASE("Null pointer deallocation")
     {
         // Should not crash
-        allocator.Deallocate(nullptr, 32);
+        allocator.Deallocate(nullptr);
     }
     
     SUBCASE("Very large allocations")
@@ -580,7 +580,7 @@ TEST_CASE("ThreadCachingAllocator Edge Cases")
         CHECK(charPtr[0] == 'A');
         CHECK(charPtr[1023] == 'Z');
         
-        allocator.Deallocate(ptr, 1024);
+        allocator.Deallocate(ptr);
     }
     
     SUBCASE("Rapid allocation/deallocation cycles")
@@ -599,7 +599,7 @@ TEST_CASE("ThreadCachingAllocator Edge Cases")
             // Deallocate
             for (void* ptr : ptrs)
             {
-                allocator.Deallocate(ptr, 32);
+                allocator.Deallocate(ptr);
             }
         }
     }
@@ -620,7 +620,7 @@ TEST_CASE("ThreadCachingAllocator Type Safety")
         CHECK(small->value == 42);
         
         small->~SmallObject();
-        allocator.Deallocate(small, sizeof(SmallObject));
+        allocator.Deallocate(small);
         
         // Medium object
         MediumObject* medium = static_cast<MediumObject*>(allocator.Allocate(sizeof(MediumObject)));
@@ -631,7 +631,7 @@ TEST_CASE("ThreadCachingAllocator Type Safety")
         CHECK(medium->values[0] == 3.14159);
         
         medium->~MediumObject();
-        allocator.Deallocate(medium, sizeof(MediumObject));
+        allocator.Deallocate(medium);
         
         // Large object (should use different allocation path)
         LargeObject* large = static_cast<LargeObject*>(allocator.Allocate(sizeof(LargeObject)));
@@ -644,7 +644,7 @@ TEST_CASE("ThreadCachingAllocator Type Safety")
         CHECK(large->data[sizeof(LargeObject::data) - 1] == 'Y');
         
         large->~LargeObject();
-        allocator.Deallocate(large, sizeof(LargeObject));
+        allocator.Deallocate(large);
     }
 }
 
@@ -672,8 +672,8 @@ TEST_CASE("ThreadCachingAllocator Multiple Instances")
         CHECK(*static_cast<int*>(ptr2) == 0xBBBB);
         
         // Clean up
-        allocator1.Deallocate(ptr1, 64);
-        allocator2.Deallocate(ptr2, 64);
+        allocator1.Deallocate(ptr1);
+        allocator2.Deallocate(ptr2);
         
         // Verify that both allocators worked independently
         // Since we can't check total allocated size, we just verify the allocations succeeded
@@ -733,9 +733,9 @@ TEST_CASE("ThreadCachingAllocator Multiple Instances")
                 
                 // Clean up
                 for (void* ptr : ptrs1)
-                    allocator1.Deallocate(ptr, 32);
+                    allocator1.Deallocate(ptr);
                 for (void* ptr : ptrs2)
-                    allocator2.Deallocate(ptr, 32);
+                    allocator2.Deallocate(ptr);
             });
         }
         
