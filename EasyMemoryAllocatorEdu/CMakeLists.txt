@@ -1,0 +1,27 @@
+# Library
+add_library                 (eallockit INTERFACE)
+target_include_directories  (eallockit INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+function(create_eallockit_test test_name source_file)
+    add_executable          (${test_name} ${source_file})
+    target_link_libraries   (${test_name} PUBLIC eallockit)
+    add_test                (NAME ${test_name} COMMAND ${test_name})
+endfunction()
+
+if (ENABLE_EALLOCKIT_TEST)
+    enable_testing()
+
+    create_eallockit_test (eallockit_test_memory_util                  ${CMAKE_CURRENT_SOURCE_DIR}/test/TestMemoryAllocatorUtil.cpp)
+    create_eallockit_test (eallockit_test_memory_linear_allocator      ${CMAKE_CURRENT_SOURCE_DIR}/test/TestLinearAllocator.cpp)
+    create_eallockit_test (eallockit_test_memory_free_list_allocator   ${CMAKE_CURRENT_SOURCE_DIR}/test/TestFreeListAllocator.cpp)
+    create_eallockit_test (eallockit_test_memory_pool_allocator        ${CMAKE_CURRENT_SOURCE_DIR}/test/TestPoolAllocator.cpp)
+    create_eallockit_test (eallockit_test_memory_stack_allocator       ${CMAKE_CURRENT_SOURCE_DIR}/test/TestStackAllocator.cpp)
+    create_eallockit_test (eallockit_test_memory_tlsf_allocator        ${CMAKE_CURRENT_SOURCE_DIR}/test/TestTLSFAllocator.cpp)
+    create_eallockit_test (eallockit_test_memory_buddy_allocator       ${CMAKE_CURRENT_SOURCE_DIR}/test/TestBuddyAllocator.cpp)
+    create_eallockit_test (eallockit_test_memory_slab_allocator        ${CMAKE_CURRENT_SOURCE_DIR}/test/TestSlabAllocator.cpp)
+    create_eallockit_test (eallockit_test_memory_ring_buffer_allocator ${CMAKE_CURRENT_SOURCE_DIR}/test/TestRingBufferAllocator.cpp)
+    create_eallockit_test (eallockit_test_memory_thread_caching_allocator ${CMAKE_CURRENT_SOURCE_DIR}/test/TestThreadCachingAllocator.cpp)
+    create_eallockit_test (eallockit_test_memory_frame_allocator       ${CMAKE_CURRENT_SOURCE_DIR}/test/TestFrameAllocator.cpp)
+    create_eallockit_test (eallockit_test_arena_allocator              ${CMAKE_CURRENT_SOURCE_DIR}/test/TestArenaAllocator.cpp)
+
+endif ()
