@@ -37,7 +37,6 @@ namespace EAllocKit
         void* GetMemoryBlockPtr() const { return _pData; }
         
     private:
-        size_t AlignSize(size_t size, size_t alignment) const;
         size_t GetAvailableContiguous() const;
         
     private:
@@ -85,19 +84,19 @@ namespace EAllocKit
             return nullptr;
         
         uint8_t* buffer = static_cast<uint8_t*>(_pData);
-        uintptr_t bufferAddr = reinterpret_cast<uintptr_t>(buffer);
+        uintptr_t bufferAddr = Util::ToAddr(buffer);
         
         // Calculate where the header will go
         size_t headerPos = _writePtr;
         uintptr_t dataPosAddr = bufferAddr + headerPos + sizeof(AllocationHeader);
         
         // Align the data position
-        uintptr_t alignedDataPosAddr = (dataPosAddr + alignment - 1) & ~(alignment - 1);
+        uintptr_t alignedDataPosAddr = Util::UpAlignment(dataPosAddr, alignment);
         size_t alignedDataPos = static_cast<size_t>(alignedDataPosAddr - bufferAddr);
         size_t alignmentPadding = alignedDataPos - (headerPos + sizeof(AllocationHeader));
         
         // Total size includes header, alignment padding, and data
-        size_t alignedSize = AlignSize(size, _defaultAlignment);
+        size_t alignedSize = Util::UpAlignment(size, _defaultAlignment);
         size_t totalSize = sizeof(AllocationHeader) + alignmentPadding + alignedSize;
         
         // Check if we have enough space
@@ -118,7 +117,7 @@ namespace EAllocKit
             _writePtr = 0;
             headerPos = 0;
             dataPosAddr = bufferAddr + sizeof(AllocationHeader);
-            alignedDataPosAddr = (dataPosAddr + alignment - 1) & ~(alignment - 1);
+            alignedDataPosAddr = Util::UpAlignment(dataPosAddr, alignment);
             alignedDataPos = static_cast<size_t>(alignedDataPosAddr - bufferAddr);
             alignmentPadding = alignedDataPos - sizeof(AllocationHeader);
             totalSize = sizeof(AllocationHeader) + alignmentPadding + alignedSize;
@@ -191,11 +190,6 @@ namespace EAllocKit
     inline size_t RingBufferAllocator::GetAvailableSpace() const
     {
         return _size - GetUsedSpace();
-    }
-    
-    inline size_t RingBufferAllocator::AlignSize(size_t size, size_t alignment) const
-    {
-        return (size + alignment - 1) & ~(alignment - 1);
     }
     
     inline size_t RingBufferAllocator::GetAvailableContiguous() const
