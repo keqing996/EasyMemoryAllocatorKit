@@ -2,7 +2,6 @@
 
 #include <cstdint>
 #include <stdexcept>
-#include "Util/Util.hpp"
 
 namespace EAllocKit
 {
@@ -26,8 +25,31 @@ namespace EAllocKit
         size_t GetAvailableBlockCount() const;
         Node* GetFreeListHeadNode() const;
 
+    private: // Util functions
+        static bool IsPowerOfTwo(size_t value)
+        {
+            return value > 0 && (value & (value - 1)) == 0;
+        }
+
+        static size_t UpAlignment(size_t size, size_t alignment)
+        {
+            return (size + alignment - 1) & ~(alignment - 1);
+        }
+
+        template <typename T>
+        static size_t ToAddr(const T* p)
+        {
+            return reinterpret_cast<size_t>(p);
+        }
+
+        template <typename T>
+        static T* PtrOffsetBytes(T* ptr, std::ptrdiff_t offset)
+        {
+            return reinterpret_cast<T*>(static_cast<uint8_t*>(static_cast<void*>(ptr)) + offset);
+        }
+
     private:
-        void* _pData;
+        uint8_t* _pData;
         size_t _blockSize;
         size_t _blockNum;
         size_t _defaultAlignment;
@@ -39,7 +61,7 @@ namespace EAllocKit
         , _blockNum(blockNum)
         , _defaultAlignment(defaultAlignment)
     {
-        if (!Util::IsPowerOfTwo(defaultAlignment))
+        if (!IsPowerOfTwo(defaultAlignment))
             throw std::invalid_argument("PoolAllocator defaultAlignment must be a power of 2");
             
         if (blockNum == 0)
@@ -56,17 +78,17 @@ namespace EAllocKit
             size_t blockRequiredSize = minimalUserOffset + _blockSize + maxPadding;
             size_t needSize = blockRequiredSize * blockNum;
 
-            _pData = ::malloc(needSize);
+            _pData = static_cast<uint8_t*>(::malloc(needSize));
 
-            _pFreeBlockList = static_cast<Node*>(_pData);
+            _pFreeBlockList = reinterpret_cast<Node*>(_pData);
             for (size_t i = 0; i < blockNum; i++)
             {
-                Node* pBlockNode = static_cast<Node*>(Util::PtrOffsetBytes(_pData, i * blockRequiredSize));
+                Node* pBlockNode = reinterpret_cast<Node*>(_pData + i * blockRequiredSize);
                 if (i == blockNum - 1)
                     pBlockNode->pNext = nullptr;
                 else
                 {
-                    Node* pNextBlockNode = static_cast<Node*>(Util::PtrOffsetBytes(_pData, (i + 1) * blockRequiredSize));
+                    Node* pNextBlockNode = reinterpret_cast<Node*>(_pData + (i + 1) * blockRequiredSize);
                     pBlockNode->pNext = pNextBlockNode;
                 }
             }
@@ -91,11 +113,11 @@ namespace EAllocKit
         _pFreeBlockList = _pFreeBlockList->pNext;
         
         // Calculate aligned user data address (like FreeListAllocator)
-        size_t nodeStartAddr = Util::ToAddr(pResult);
+        size_t nodeStartAddr = ToAddr(pResult);
         size_t headerSize = sizeof(Node);
         size_t afterHeaderAddr = nodeStartAddr + headerSize;
         size_t minimalUserAddr = afterHeaderAddr + 4;  // Reserve 4 bytes for distance
-        size_t alignedUserAddr = Util::UpAlignment(minimalUserAddr, _defaultAlignment);
+        size_t alignedUserAddr = UpAlignment(minimalUserAddr, _defaultAlignment);
         
         // Store distance from user pointer back to node header
         void* pAlignedUserData = reinterpret_cast<void*>(alignedUserAddr);
@@ -116,7 +138,7 @@ namespace EAllocKit
         uint32_t distance = *pDistanceStorage;
         
         // Calculate node address
-        size_t userAddr = Util::ToAddr(p);
+        size_t userAddr = ToAddr(p);
         size_t nodeAddr = userAddr - distance;
         Node* pNode = reinterpret_cast<Node*>(nodeAddr);
         

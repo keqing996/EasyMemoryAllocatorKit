@@ -10,7 +10,6 @@
 #include <cstring>
 #include <stdexcept>
 #include <algorithm>
-#include "Util/Util.hpp"
 
 // Platform-specific TLS API abstraction
 #ifdef _WIN32
@@ -196,6 +195,17 @@ namespace EAllocKit
 
         // Statistics and debugging
         size_t GetThreadCacheSize() const;
+
+    private: // Util
+        static bool IsPowerOfTwo(size_t value)
+        {
+            return value > 0 && (value & (value - 1)) == 0;
+        }
+
+        static size_t UpAlignment(size_t size, size_t alignment)
+        {
+            return (size + alignment - 1) & ~(alignment - 1);
+        }
 
     private:
         // Global components
@@ -533,7 +543,7 @@ namespace EAllocKit
         if (size == 0) 
             return nullptr;
         
-        if (!Util::IsPowerOfTwo(alignment))
+        if (!IsPowerOfTwo(alignment))
             throw std::invalid_argument("ThreadCachingAllocator only supports power-of-2 alignments");
         
         // Store original size
@@ -572,10 +582,10 @@ namespace EAllocKit
         }
         
         // Calculate aligned user address
-        size_t rawAddr = Util::ToAddr(rawPtr);
+        size_t rawAddr = reinterpret_cast<size_t>(rawPtr);
         size_t afterHeaderAddr = rawAddr + headerSize;
         size_t minimalUserAddr = afterHeaderAddr + distanceSize;
-        size_t alignedUserAddr = Util::UpAlignment(minimalUserAddr, alignment);
+        size_t alignedUserAddr = UpAlignment(minimalUserAddr, alignment);
         
         // Store allocation header at the beginning
         AllocationHeader* header = static_cast<AllocationHeader*>(rawPtr);
@@ -585,9 +595,9 @@ namespace EAllocKit
             header->sizeClass = static_cast<uint32_t>(sizeClass);
         
         // Store distance from user pointer back to header
-        void* alignedUserPtr = reinterpret_cast<void*>(alignedUserAddr);
+        uint8_t* alignedUserPtr = reinterpret_cast<uint8_t*>(alignedUserAddr);
         uint32_t distance = static_cast<uint32_t>(alignedUserAddr - rawAddr);
-        uint32_t* distPtr = static_cast<uint32_t*>(Util::PtrOffsetBytes(alignedUserPtr, -4));
+        uint32_t* distPtr = reinterpret_cast<uint32_t*>(alignedUserPtr) - 1;
         *distPtr = distance;
         
         return alignedUserPtr;
@@ -653,11 +663,11 @@ namespace EAllocKit
             return nullptr;
         
         // Read distance from 4 bytes before user pointer (like FreeListAllocator)
-        uint32_t* distPtr = static_cast<uint32_t*>(Util::PtrOffsetBytes(userPtr, -4));
+        uint32_t* distPtr = static_cast<uint32_t*>(userPtr) - 1;
         uint32_t distance = *distPtr;
         
         // Calculate header address using distance
-        void* headerPtr = Util::PtrOffsetBytes(userPtr, -static_cast<std::ptrdiff_t>(distance));
+        void* headerPtr = reinterpret_cast<uint8_t*>(userPtr) - distance;
         return static_cast<AllocationHeader*>(headerPtr);
     }
 } // namespace EAllocKit

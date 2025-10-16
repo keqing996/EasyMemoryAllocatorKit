@@ -4,7 +4,6 @@
 #include <new>
 #include <stdexcept>
 #include <utility>
-#include "Util/Util.hpp"
 
 namespace EAllocKit
 {
@@ -81,10 +80,21 @@ namespace EAllocKit
         size_t GetAllocationCount() const;
         bool IsEmpty() const;
         bool IsFull() const;
+
+    private: // Util
+        static bool IsPowerOfTwo(size_t value)
+        {
+            return value > 0 && (value & (value - 1)) == 0;
+        }
+
+        static size_t UpAlignment(size_t size, size_t alignment)
+        {
+            return (size + alignment - 1) & ~(alignment - 1);
+        }
         
     private:
-        void* _pMemory;
-        void* _pCurrent;
+        uint8_t* _pMemory;
+        uint8_t* _pCurrent;
         size_t _capacity;
         size_t _defaultAlignment;
         size_t _allocationCount;
@@ -97,13 +107,13 @@ namespace EAllocKit
         , _defaultAlignment(defaultAlignment)
         , _allocationCount(0)
     {
-        if (!Util::IsPowerOfTwo(defaultAlignment))
+        if (!IsPowerOfTwo(defaultAlignment))
             throw std::invalid_argument("ArenaAllocator defaultAlignment must be a power of 2");
             
         if (capacity == 0)
             throw std::invalid_argument("ArenaAllocator capacity must be > 0");
         
-        _pMemory = ::malloc(capacity);
+        _pMemory = static_cast<uint8_t*>(::malloc(capacity));
         if (!_pMemory)
             throw std::bad_alloc();
         
@@ -126,12 +136,12 @@ namespace EAllocKit
         if (size == 0)
             return nullptr;
         
-        if (!Util::IsPowerOfTwo(alignment))
+        if (!IsPowerOfTwo(alignment))
             return nullptr;
         
         // Align current pointer to required alignment
         size_t currentAddr = reinterpret_cast<size_t>(_pCurrent);
-        size_t alignedAddr = Util::UpAlignment(currentAddr, alignment);
+        size_t alignedAddr = UpAlignment(currentAddr, alignment);
         size_t paddingBytes = alignedAddr - currentAddr;
         
         // Calculate total size needed (padding + actual size)
@@ -141,8 +151,8 @@ namespace EAllocKit
             return nullptr;
 
         // Update current pointer and return aligned address
-        void* result = reinterpret_cast<void*>(alignedAddr);
-        _pCurrent = Util::PtrOffsetBytes(result, size);
+        uint8_t* result = reinterpret_cast<uint8_t*>(alignedAddr);
+        _pCurrent = result + size;
         ++_allocationCount;
         
         return result;
@@ -190,13 +200,13 @@ namespace EAllocKit
             return;
         
         // Validate checkpoint is within our memory bounds
-        void* base = _pMemory;
-        void* end = Util::PtrOffsetBytes(_pMemory, _capacity);
+        uint8_t* base = _pMemory;
+        uint8_t* end = _pMemory + _capacity;
         
         if (checkpoint.pSaved < base || checkpoint.pSaved > end)
             return;
         
-        _pCurrent = checkpoint.pSaved;
+        _pCurrent = static_cast<uint8_t*>(checkpoint.pSaved);
     }
     
     inline ArenaAllocator::ScopeGuard ArenaAllocator::CreateScope()
@@ -211,7 +221,7 @@ namespace EAllocKit
     
     inline size_t ArenaAllocator::GetUsedBytes() const
     {
-        return reinterpret_cast<size_t>(_pCurrent) - reinterpret_cast<size_t>(_pMemory);
+        return _pCurrent - _pMemory;
     }
     
     inline size_t ArenaAllocator::GetRemainingBytes() const
@@ -231,8 +241,8 @@ namespace EAllocKit
         if (!ptr) 
             return false;
         
-        void* base = _pMemory;
-        void* end = Util::PtrOffsetBytes(_pMemory, _capacity);
+        uint8_t* base = _pMemory;
+        uint8_t* end = _pMemory + _capacity;
         
         return ptr >= base && ptr < end;
     }

@@ -4,7 +4,6 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <array>
-#include "Util/Util.hpp"
 
 namespace EAllocKit
 {
@@ -33,25 +32,25 @@ namespace EAllocKit
         public:
             size_t GetSize() const
             {
-                return _usedAndSize & ~Util::HIGHEST_BIT_MASK;
+                return _usedAndSize & ~HIGHEST_BIT_MASK;
             }
 
             void SetSize(size_t size)
             {
-                _usedAndSize = (_usedAndSize & Util::HIGHEST_BIT_MASK) | (size & ~Util::HIGHEST_BIT_MASK);
+                _usedAndSize = (_usedAndSize & HIGHEST_BIT_MASK) | (size & ~HIGHEST_BIT_MASK);
             }
 
             bool IsUsed() const
             {
-                return (_usedAndSize & Util::HIGHEST_BIT_MASK) != 0;
+                return (_usedAndSize & HIGHEST_BIT_MASK) != 0;
             }
 
             void SetUsed(bool used)
             {
                 if (used)
-                    _usedAndSize |= Util::HIGHEST_BIT_MASK;
+                    _usedAndSize |= HIGHEST_BIT_MASK;
                 else
-                    _usedAndSize &= ~Util::HIGHEST_BIT_MASK;
+                    _usedAndSize &= ~HIGHEST_BIT_MASK;
             }
 
             BlockHeader* GetPrevPhysical() const
@@ -119,7 +118,7 @@ namespace EAllocKit
             , _slBitmaps{}
             , _freeLists{}
         {
-            if (!Util::IsPowerOfTwo(defaultAlignment))
+            if (!IsPowerOfTwo(defaultAlignment))
                 throw std::invalid_argument("TLSFAllocator defaultAlignment must be a power of 2");
                 
             size_t headerSize = sizeof(BlockHeader);
@@ -127,7 +126,7 @@ namespace EAllocKit
             if (_size < minSize)
                 _size = minSize;
 
-            _pData = ::malloc(_size);
+            _pData = static_cast<uint8_t*>(::malloc(_size));
             
             if (!_pData)
                 throw std::bad_alloc();
@@ -157,7 +156,7 @@ namespace EAllocKit
             if (size == 0)
                 return nullptr;
                 
-            if (!Util::IsPowerOfTwo(alignment))
+            if (!IsPowerOfTwo(alignment))
                 throw std::invalid_argument("TLSFAllocator only supports power-of-2 alignments");
                 
             const size_t headerSize = sizeof(BlockHeader);
@@ -177,10 +176,10 @@ namespace EAllocKit
             RemoveFromFreeList(block);
             
             // Calculate aligned user data address
-            size_t blockAddr = Util::ToAddr(block);
+            size_t blockAddr = ToAddr(block);
             size_t afterHeaderAddr = blockAddr + headerSize;
             size_t minimalUserAddr = afterHeaderAddr + 4;  // Reserve 4 bytes for distance
-            size_t alignedUserAddr = Util::UpAlignment(minimalUserAddr, alignment);
+            size_t alignedUserAddr = UpAlignment(minimalUserAddr, alignment);
             
             // Calculate actual used space
             size_t totalUsed = (alignedUserAddr - afterHeaderAddr) + size;
@@ -232,7 +231,7 @@ namespace EAllocKit
             size_t headerSize = sizeof(BlockHeader);
             
             // Initialize the entire pool as one large free block
-            _pFirstBlock = static_cast<BlockHeader*>(_pData);
+            _pFirstBlock = reinterpret_cast<BlockHeader*>(_pData);
             _pFirstBlock->SetUsed(false);
             _pFirstBlock->SetSize(_size - headerSize);
             _pFirstBlock->SetPrevPhysical(nullptr);
@@ -272,7 +271,7 @@ namespace EAllocKit
             }
             else
             {
-                fl = Util::Log2(size);
+                fl = Log2(size);
                 
                 // Clamp fl to valid range
                 if (fl >= FL_COUNT) 
@@ -283,7 +282,7 @@ namespace EAllocKit
                 else
                 {
                     // Extract second level index from remaining bits
-                    size_t slLog = Util::Log2(SL_COUNT);
+                    size_t slLog = Log2(SL_COUNT);
                     if (fl >= slLog)
                     {
                         size_t slShift = fl - slLog;
@@ -484,27 +483,27 @@ namespace EAllocKit
         
         static void StoreDistance(void* userPtr, uint32_t distance)
         {
-            uint32_t* distPtr = static_cast<uint32_t*>(Util::PtrOffsetBytes(userPtr, -4));
+            uint32_t* distPtr = static_cast<uint32_t*>(PtrOffsetBytes(userPtr, -4));
             *distPtr = distance;
         }
 
         static uint32_t ReadDistance(void* userPtr)
         {
-            uint32_t* distPtr = static_cast<uint32_t*>(Util::PtrOffsetBytes(userPtr, -4));
+            uint32_t* distPtr = static_cast<uint32_t*>(PtrOffsetBytes(userPtr, -4));
             return *distPtr;
         }
 
         static BlockHeader* GetHeaderFromUserPtr(void* userPtr)
         {
             uint32_t distance = ReadDistance(userPtr);
-            return static_cast<BlockHeader*>(Util::PtrOffsetBytes(userPtr, -static_cast<std::ptrdiff_t>(distance)));
+            return static_cast<BlockHeader*>(PtrOffsetBytes(userPtr, -static_cast<std::ptrdiff_t>(distance)));
         }
         
         bool IsValidBlock(const BlockHeader* block) const
         {
-            const size_t dataBeginAddr = Util::ToAddr(_pData);
+            const size_t dataBeginAddr = ToAddr(_pData);
             const size_t dataEndAddr = dataBeginAddr + _size;
-            const size_t blockStartAddr = Util::ToAddr(block);
+            const size_t blockStartAddr = ToAddr(block);
             const size_t blockEndAddr = blockStartAddr + sizeof(BlockHeader);
             return blockStartAddr >= dataBeginAddr && blockEndAddr < dataEndAddr;
         }
@@ -523,8 +522,41 @@ namespace EAllocKit
             return bit;
         }
 
+    private: // Util functions and constants
+        static constexpr size_t HIGHEST_BIT_MASK = static_cast<size_t>(1) << (sizeof(size_t) * 8 - 1);
+        
+        static bool IsPowerOfTwo(size_t value)
+        {
+            return value > 0 && (value & (value - 1)) == 0;
+        }
+
+        static size_t UpAlignment(size_t size, size_t alignment)
+        {
+            return (size + alignment - 1) & ~(alignment - 1);
+        }
+
+        template <typename T>
+        static size_t ToAddr(const T* p)
+        {
+            return reinterpret_cast<size_t>(p);
+        }
+
+        template <typename T>
+        static T* PtrOffsetBytes(T* ptr, std::ptrdiff_t offset)
+        {
+            return reinterpret_cast<T*>(static_cast<uint8_t*>(static_cast<void*>(ptr)) + offset);
+        }
+        
+        static size_t Log2(size_t value)
+        {
+            size_t result = 0;
+            while (value >>= 1)
+                result++;
+            return result;
+        }
+
     private:
-        void* _pData;
+        uint8_t* _pData;
         size_t _size;
         size_t _defaultAlignment;
         BlockHeader* _pFirstBlock;

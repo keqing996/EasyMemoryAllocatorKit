@@ -2,7 +2,6 @@
 
 #include <cstdint>
 #include <stdexcept>
-#include "Util/Util.hpp"
 
 namespace EAllocKit
 {
@@ -42,16 +41,39 @@ namespace EAllocKit
         void* GetStackTop() const;
         bool IsStackTop(void* p) const;
 
+    private: // Util functions
+        static bool IsPowerOfTwo(size_t value)
+        {
+            return value > 0 && (value & (value - 1)) == 0;
+        }
+
+        static size_t UpAlignment(size_t size, size_t alignment)
+        {
+            return (size + alignment - 1) & ~(alignment - 1);
+        }
+
+        template <typename T>
+        static size_t ToAddr(const T* p)
+        {
+            return reinterpret_cast<size_t>(p);
+        }
+
+        template <typename T>
+        static T* PtrOffsetBytes(T* ptr, std::ptrdiff_t offset)
+        {
+            return reinterpret_cast<T*>(static_cast<uint8_t*>(static_cast<void*>(ptr)) + offset);
+        }
+
     private:
         static void StoreDistance(void* userPtr, uint32_t distance);
         static uint32_t ReadDistance(void* userPtr);
         static StackFrameHeader* GetHeaderFromUserPtr(void* userPtr);
 
     private:
-        void* _pData;
+        uint8_t* _pData;
         size_t _size;
         size_t _defaultAlignment;
-        void* _pStackTop;
+        uint8_t* _pStackTop;
     };
 
     inline StackAllocator::StackAllocator(size_t size, size_t defaultAlignment)
@@ -60,7 +82,7 @@ namespace EAllocKit
         , _defaultAlignment(defaultAlignment)
         , _pStackTop(nullptr)
     {
-        if (!Util::IsPowerOfTwo(defaultAlignment))
+        if (!IsPowerOfTwo(defaultAlignment))
             throw std::invalid_argument("StackAllocator defaultAlignment must be a power of 2");
             
         // Minimum size should accommodate at least one allocation (header + distance + some data)
@@ -88,7 +110,7 @@ namespace EAllocKit
 
     inline void* StackAllocator::Allocate(size_t size, size_t alignment)
     {
-        if (!Util::IsPowerOfTwo(alignment))
+        if (!IsPowerOfTwo(alignment))
             throw std::invalid_argument("StackAllocator only supports power-of-2 alignments");
             
         size_t headerSize = sizeof(StackFrameHeader);
@@ -98,25 +120,25 @@ namespace EAllocKit
         size_t thisFrameStartPos;
         if (_pStackTop == nullptr)
         {
-            thisFrameStartPos = Util::ToAddr(_pData);
+            thisFrameStartPos = ToAddr(_pData);
         }
         else
         {
             // Next frame starts after the current top frame's user data
             StackFrameHeader* currentHeader = GetHeaderFromUserPtr(_pStackTop);
-            thisFrameStartPos = Util::ToAddr(_pStackTop) + currentHeader->size;
+            thisFrameStartPos = ToAddr(_pStackTop) + currentHeader->size;
         }
         
         // Calculate aligned user data address
         size_t afterHeaderAddr = thisFrameStartPos + headerSize;
         size_t minimalUserAddr = afterHeaderAddr + 4;
-        size_t alignedUserAddr = Util::UpAlignment(minimalUserAddr, alignment);
+        size_t alignedUserAddr = UpAlignment(minimalUserAddr, alignment);
         
         // Calculate total space needed  
         size_t totalNeeded = (alignedUserAddr - thisFrameStartPos) + requiredUserSize;
 
         // Check if we have enough space
-        size_t availableSize = Util::ToAddr(_pData) + _size - thisFrameStartPos;
+        size_t availableSize = ToAddr(_pData) + _size - thisFrameStartPos;
         if (availableSize < totalNeeded)
             return nullptr;
 
@@ -126,7 +148,7 @@ namespace EAllocKit
         pHeader->pPrev = _pStackTop;
         
         // Store distance and update stack top
-        void* pAlignedUserData = reinterpret_cast<void*>(alignedUserAddr);
+        uint8_t* pAlignedUserData = reinterpret_cast<uint8_t*>(alignedUserAddr);
         uint32_t distance = static_cast<uint32_t>(alignedUserAddr - thisFrameStartPos);
         
         // Store distance at the dedicated distance location (just before user data)
@@ -148,7 +170,7 @@ namespace EAllocKit
         void* pPrevUserData = pCurrentHeader->pPrev;
         
         // Update stack top to previous user data
-        _pStackTop = pPrevUserData;
+        _pStackTop = static_cast<uint8_t*>(pPrevUserData);
     }
 
     inline void* StackAllocator::GetStackTop() const
@@ -167,19 +189,19 @@ namespace EAllocKit
 
     inline void StackAllocator::StoreDistance(void* userPtr, uint32_t distance)
     {
-        uint32_t* distPtr = static_cast<uint32_t*>(Util::PtrOffsetBytes(userPtr, -4));
+        uint32_t* distPtr = static_cast<uint32_t*>(PtrOffsetBytes(userPtr, -4));
         *distPtr = distance;
     }
 
     inline uint32_t StackAllocator::ReadDistance(void* userPtr)
     {
-        uint32_t* distPtr = static_cast<uint32_t*>(Util::PtrOffsetBytes(userPtr, -4));
+        uint32_t* distPtr = static_cast<uint32_t*>(PtrOffsetBytes(userPtr, -4));
         return *distPtr;
     }
 
     inline StackAllocator::StackFrameHeader* StackAllocator::GetHeaderFromUserPtr(void* userPtr)
     {
         uint32_t distance = ReadDistance(userPtr);
-        return static_cast<StackFrameHeader*>(Util::PtrOffsetBytes(userPtr, -static_cast<std::ptrdiff_t>(distance)));
+        return static_cast<StackFrameHeader*>(PtrOffsetBytes(userPtr, -static_cast<std::ptrdiff_t>(distance)));
     }
 }

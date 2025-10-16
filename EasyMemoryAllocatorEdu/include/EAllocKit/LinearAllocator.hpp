@@ -3,7 +3,6 @@
 #include <cstdint>
 #include <new>
 #include <stdexcept>
-#include "Util/Util.hpp"
 
 namespace EAllocKit
 {
@@ -25,20 +24,31 @@ namespace EAllocKit
         void* GetCurrentPtr() const;
         size_t GetAvailableSpaceSize() const;
 
+    private: // Util functions
+        static bool IsPowerOfTwo(size_t value)
+        {
+            return value > 0 && (value & (value - 1)) == 0;
+        }
+
+        static size_t UpAlignment(size_t size, size_t alignment)
+        {
+            return (size + alignment - 1) & ~(alignment - 1);
+        }
+
     private:
-        void* _pData;
-        void* _pCurrent;
+        uint8_t* _pData;
+        uint8_t* _pCurrent;
         size_t _size;
         size_t _defaultAlignment;
     };
 
     inline LinearAllocator::LinearAllocator(size_t size, size_t defaultAlignment)
-        : _pData(::malloc(size))
+        : _pData(static_cast<uint8_t*>(::malloc(size)))
         , _pCurrent(_pData)
         , _size(size)
         , _defaultAlignment(defaultAlignment)
     {
-        if (!Util::IsPowerOfTwo(defaultAlignment))
+        if (!IsPowerOfTwo(defaultAlignment))
             throw std::invalid_argument("LinearAllocator defaultAlignment must be a power of 2");
             
         if (!_pData)
@@ -58,12 +68,12 @@ namespace EAllocKit
 
     inline void* LinearAllocator::Allocate(size_t size, size_t alignment)
     {
-        if (!Util::IsPowerOfTwo(alignment))
+        if (!IsPowerOfTwo(alignment))
             throw std::invalid_argument("LinearAllocator only supports power-of-2 alignments");
             
         // Align current pointer to required alignment
         size_t currentAddr = reinterpret_cast<size_t>(_pCurrent);
-        size_t alignedAddr = Util::UpAlignment(currentAddr, alignment);
+        size_t alignedAddr = UpAlignment(currentAddr, alignment);
         
         // Calculate space needed: alignment padding + actual size
         size_t paddingBytes = alignedAddr - currentAddr;
@@ -73,8 +83,8 @@ namespace EAllocKit
             return nullptr;
 
         // Update current pointer to point after the allocated block
-        void* result = reinterpret_cast<void*>(alignedAddr);
-        _pCurrent = Util::PtrOffsetBytes(result, size);
+        uint8_t* result = reinterpret_cast<uint8_t*>(alignedAddr);
+        _pCurrent = result + size;
         return result;
     }
 
@@ -100,6 +110,6 @@ namespace EAllocKit
 
     inline size_t LinearAllocator::GetAvailableSpaceSize() const
     {
-        return reinterpret_cast<size_t>(_pData) + _size - reinterpret_cast<size_t>(_pCurrent);
+        return _pData + _size - _pCurrent;
     }
 }
