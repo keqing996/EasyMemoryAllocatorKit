@@ -6,7 +6,6 @@
 #include <cstring>
 #include <new>
 #include <stdexcept>
-#include "EAllocKit/Util/Util.hpp"
 
 namespace EAllocKit
 {
@@ -48,8 +47,42 @@ namespace EAllocKit
         void* AllocateBlock(size_t order);
         void DeallocateBlock(void* ptr, size_t order);
         
+    private: // Util functions
+        static bool IsPowerOfTwo(size_t value)
+        {
+            return value > 0 && (value & (value - 1)) == 0;
+        }
+
+        static size_t RoundUpToPowerOf2(size_t size)
+        {
+            if (size == 0)
+                return 1;
+
+            size--;
+            size |= size >> 1;
+            size |= size >> 2;
+            size |= size >> 4;
+            size |= size >> 8;
+            size |= size >> 16;
+
+            if constexpr (sizeof(size_t) > 4)
+                size |= size >> 32;
+
+            size++;
+
+            return size;
+        }
+        
+        static size_t Log2(size_t value)
+        {
+            size_t result = 0;
+            while (value >>= 1)
+                result++;
+            return result;
+        }
+
     private:
-        void* _pData;                      // Memory pool
+        uint8_t* _pData;                   // Memory pool
         size_t _size;                      // Total size (power of 2)
         size_t _maxOrder;                  // Maximum order based on size
         size_t _defaultAlignment;          // Default alignment
@@ -66,16 +99,16 @@ namespace EAllocKit
         , _blockStatus(nullptr)
         , _bitmapSize(0)
     {
-        if (!Util::IsPowerOfTwo(defaultAlignment))
+        if (!IsPowerOfTwo(defaultAlignment))
             throw std::invalid_argument("BuddyAllocator defaultAlignment must be a power of 2");
             
         // Round size down to power of 2
-        _size = Util::RoundUpToPowerOf2(size);
+        _size = RoundUpToPowerOf2(size);
         if (_size < MIN_BLOCK_SIZE)
             _size = MIN_BLOCK_SIZE;
         
         // Calculate max order
-        _maxOrder = Util::Log2(_size / MIN_BLOCK_SIZE) + 1;
+        _maxOrder = Log2(_size / MIN_BLOCK_SIZE) + 1;
         if (_maxOrder > MAX_ORDER)
             _maxOrder = MAX_ORDER;
         
@@ -92,12 +125,12 @@ namespace EAllocKit
         if (!memory)
             throw std::bad_alloc();
         
-        _pData = memory;
+        _pData = static_cast<uint8_t*>(memory);
         _blockStatus = static_cast<uint8_t*>(memory) + _size;
         std::memset(_blockStatus, 0, _bitmapSize);
         
         // Add the entire memory pool as one free block at max order
-        FreeBlock* initialBlock = static_cast<FreeBlock*>(_pData);
+        FreeBlock* initialBlock = reinterpret_cast<FreeBlock*>(_pData);
         initialBlock->next = nullptr;
         _freeLists[_maxOrder - 1] = initialBlock;
     }
@@ -118,7 +151,7 @@ namespace EAllocKit
         if (size == 0)
             return nullptr;
             
-        if (!Util::IsPowerOfTwo(alignment))
+        if (!IsPowerOfTwo(alignment))
             throw std::invalid_argument("BuddyAllocator only supports power-of-2 alignments");
         
         // Check for size overflow - if size is too large, return nullptr
@@ -140,7 +173,7 @@ namespace EAllocKit
             return nullptr;
         
         // Round up to power of 2, with minimum size
-        size_t blockSize = Util::RoundUpToPowerOf2(adjustedSize);
+        size_t blockSize = RoundUpToPowerOf2(adjustedSize);
         
         // Check for overflow in RoundUpToPowerOf2 (it returns 0 on overflow)
         if (blockSize == 0 || blockSize < adjustedSize)
@@ -201,7 +234,7 @@ namespace EAllocKit
     
     inline size_t BuddyAllocator::GetOrderFromSize(size_t size) const
     {
-        return Util::Log2(size / MIN_BLOCK_SIZE);
+        return Log2(size / MIN_BLOCK_SIZE);
     }
     
     inline size_t BuddyAllocator::GetSizeFromOrder(size_t order) const

@@ -12,6 +12,6 @@ endif ()
 
 if (ENABLE_EASY_MEMORY_ALLOCATOR_EDU)
     add_subdirectory(EasyMemoryAllocatorEdu)
-else()
-    add_subdirectory(EasyMemoryAllocatorPro)
 endif()
+
+add_subdirectory(EasyMemoryAllocatorPro)

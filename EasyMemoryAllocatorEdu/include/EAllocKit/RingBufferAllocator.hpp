@@ -5,7 +5,7 @@
 #include <cstdlib>
 #include <new>
 #include <stdexcept>
-#include "Util/Util.hpp"
+
 
 namespace EAllocKit
 {
@@ -36,11 +36,28 @@ namespace EAllocKit
         size_t GetAvailableSpace() const;
         void* GetMemoryBlockPtr() const { return _pData; }
         
+    private: // Util functions
+        static bool IsPowerOfTwo(size_t value)
+        {
+            return value > 0 && (value & (value - 1)) == 0;
+        }
+
+        static size_t UpAlignment(size_t size, size_t alignment)
+        {
+            return (size + alignment - 1) & ~(alignment - 1);
+        }
+
+        template <typename T>
+        static size_t ToAddr(const T* p)
+        {
+            return reinterpret_cast<size_t>(p);
+        }
+
     private:
         size_t GetAvailableContiguous() const;
         
     private:
-        void* _pData;          // Memory buffer
+        uint8_t* _pData;       // Memory buffer
         size_t _size;          // Total size
         size_t _defaultAlignment;  // Default alignment
         size_t _writePtr;      // Write position (producer)
@@ -56,11 +73,11 @@ namespace EAllocKit
         , _readPtr(0)
         , _isFull(false)
     {
-        if (!Util::IsPowerOfTwo(defaultAlignment))
+        if (!IsPowerOfTwo(defaultAlignment))
             throw std::invalid_argument("RingBufferAllocator defaultAlignment must be a power of 2");
             
         // malloc typically provides alignment for max_align_t (usually 16 bytes)
-        _pData = ::malloc(_size);
+        _pData = static_cast<uint8_t*>(::malloc(_size));
         if (!_pData)
             throw std::bad_alloc();
         
@@ -84,19 +101,19 @@ namespace EAllocKit
             return nullptr;
         
         uint8_t* buffer = static_cast<uint8_t*>(_pData);
-        uintptr_t bufferAddr = Util::ToAddr(buffer);
+        uintptr_t bufferAddr = ToAddr(buffer);
         
         // Calculate where the header will go
         size_t headerPos = _writePtr;
         uintptr_t dataPosAddr = bufferAddr + headerPos + sizeof(AllocationHeader);
         
         // Align the data position
-        uintptr_t alignedDataPosAddr = Util::UpAlignment(dataPosAddr, alignment);
+        uintptr_t alignedDataPosAddr = UpAlignment(dataPosAddr, alignment);
         size_t alignedDataPos = static_cast<size_t>(alignedDataPosAddr - bufferAddr);
         size_t alignmentPadding = alignedDataPos - (headerPos + sizeof(AllocationHeader));
         
         // Total size includes header, alignment padding, and data
-        size_t alignedSize = Util::UpAlignment(size, _defaultAlignment);
+        size_t alignedSize = UpAlignment(size, _defaultAlignment);
         size_t totalSize = sizeof(AllocationHeader) + alignmentPadding + alignedSize;
         
         // Check if we have enough space
@@ -117,7 +134,7 @@ namespace EAllocKit
             _writePtr = 0;
             headerPos = 0;
             dataPosAddr = bufferAddr + sizeof(AllocationHeader);
-            alignedDataPosAddr = Util::UpAlignment(dataPosAddr, alignment);
+            alignedDataPosAddr = UpAlignment(dataPosAddr, alignment);
             alignedDataPos = static_cast<size_t>(alignedDataPosAddr - bufferAddr);
             alignmentPadding = alignedDataPos - sizeof(AllocationHeader);
             totalSize = sizeof(AllocationHeader) + alignmentPadding + alignedSize;

@@ -4,7 +4,6 @@
 #include <cstring>
 #include <new>
 #include <stdexcept>
-#include "Util/Util.hpp"
 
 namespace EAllocKit
 {
@@ -43,6 +42,12 @@ namespace EAllocKit
     private:
         void AllocateNewSlab();
         bool IsPointerFromAllocator(void* ptr) const;
+
+    private: // Util
+        static bool IsPowerOfTwo(size_t value)
+        {
+            return value > 0 && (value & (value - 1)) == 0;
+        }
         
     private:
         Slab* _slabs;              // List of all slabs
@@ -65,7 +70,7 @@ namespace EAllocKit
         , _slabCount(0)
         , _allocationCount(0)
     {
-        if (!Util::IsPowerOfTwo(defaultAlignment))
+        if (!IsPowerOfTwo(defaultAlignment))
             throw std::invalid_argument("SlabAllocator defaultAlignment must be a power of 2");
             
         // Ensure object size is at least sizeof(void*)
