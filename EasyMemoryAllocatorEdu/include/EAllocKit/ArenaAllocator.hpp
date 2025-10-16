@@ -18,14 +18,19 @@ namespace EAllocKit
             
             Checkpoint() : pSaved(nullptr), remainingBytes(0) {}
             Checkpoint(void* ptr, size_t remaining) : pSaved(ptr), remainingBytes(remaining) {}
-            bool IsValid() const { return pSaved != nullptr; }
+            auto IsValid() const -> bool { return pSaved != nullptr; }
         };
 
         // RAII scope guard for automatic checkpoint restoration
         class ScopeGuard
         {
         public:
-            explicit ScopeGuard(ArenaAllocator& arena) : _arena(arena), _checkpoint(arena.SaveCheckpoint()) {}
+            explicit ScopeGuard(ArenaAllocator& arena) 
+                : _arena(arena)
+                , _checkpoint(arena.SaveCheckpoint()) 
+            {
+            }
+
             ~ScopeGuard() 
             {
                 if (_checkpoint.IsValid())
@@ -37,8 +42,8 @@ namespace EAllocKit
             ScopeGuard(ScopeGuard&&) = delete;
             ScopeGuard& operator=(ScopeGuard&&) = delete;
 
-            void Release() { _checkpoint = Checkpoint(); }
-            const Checkpoint& GetCheckpoint() const { return _checkpoint; }
+            auto Release() -> void { _checkpoint = Checkpoint(); }
+            auto GetCheckpoint() const -> const Checkpoint& { return _checkpoint; }
             
         private:
             ArenaAllocator& _arena;
@@ -53,31 +58,27 @@ namespace EAllocKit
         ArenaAllocator& operator=(const ArenaAllocator&) = delete;
         
     public:
-        void* Allocate(size_t size);
-        void* Allocate(size_t size, size_t alignment);
-        
-        template<typename T, typename... Args>
-        T* Allocate(size_t count = 1, Args&&... args);
-        
-        void Deallocate(void* p);
+        auto Allocate(size_t size) -> void*;
+        auto Allocate(size_t size, size_t alignment) -> void*;
+        auto Deallocate(void* p) -> void;
+
+        // Reset allocator
         void Reset();
         
         // Checkpoint/Restore interface
-        Checkpoint SaveCheckpoint() const;
-        void RestoreCheckpoint(const Checkpoint& checkpoint);
-        ScopeGuard CreateScope();
+        auto SaveCheckpoint() const -> Checkpoint;
+        auto RestoreCheckpoint(const Checkpoint& checkpoint) -> void;
+        auto CreateScope() -> ScopeGuard;
         
         // Memory information
-        size_t GetCapacity() const;
-        size_t GetUsedBytes() const;
-        size_t GetRemainingBytes() const;
-        double GetUtilization() const;
+        auto GetCapacity() const -> size_t;
+        auto GetUsedBytes() const -> size_t;
+        auto GetRemainingBytes() const -> size_t;
         bool ContainsPointer(const void* ptr) const;
         void* GetMemoryBlockPtr() const;
         void* GetCurrentPtr() const;
         
         // Statistics
-        size_t GetAllocationCount() const;
         bool IsEmpty() const;
         bool IsFull() const;
 
@@ -97,7 +98,6 @@ namespace EAllocKit
         uint8_t* _pCurrent;
         size_t _capacity;
         size_t _defaultAlignment;
-        size_t _allocationCount;
     };
 
     inline ArenaAllocator::ArenaAllocator(size_t capacity, size_t defaultAlignment)
@@ -105,10 +105,9 @@ namespace EAllocKit
         , _pCurrent(nullptr)
         , _capacity(capacity)
         , _defaultAlignment(defaultAlignment)
-        , _allocationCount(0)
     {
         if (!IsPowerOfTwo(defaultAlignment))
-            throw std::invalid_argument("ArenaAllocator defaultAlignment must be a power of 2");
+            throw std::invalid_argument("Alignment must be a power of 2");
             
         if (capacity == 0)
             throw std::invalid_argument("ArenaAllocator capacity must be > 0");
@@ -137,7 +136,7 @@ namespace EAllocKit
             return nullptr;
         
         if (!IsPowerOfTwo(alignment))
-            return nullptr;
+            throw std::invalid_argument("Alignment must be a power of 2");
         
         // Align current pointer to required alignment
         size_t currentAddr = reinterpret_cast<size_t>(_pCurrent);
@@ -153,29 +152,8 @@ namespace EAllocKit
         // Update current pointer and return aligned address
         uint8_t* result = reinterpret_cast<uint8_t*>(alignedAddr);
         _pCurrent = result + size;
-        ++_allocationCount;
         
         return result;
-    }
-    
-    template<typename T, typename... Args>
-    inline T* ArenaAllocator::Allocate(size_t count, Args&&... args)
-    {
-        if (count == 0) 
-            return nullptr;
-        
-        void* ptr = Allocate(sizeof(T) * count, alignof(T));
-        if (!ptr) 
-            return nullptr;
-        
-        T* typedPtr = static_cast<T*>(ptr);
-        
-        // Construct objects
-        for (size_t i = 0; i < count; ++i) {
-            new (typedPtr + i) T(std::forward<Args>(args)...);
-        }
-        
-        return typedPtr;
     }
     
     inline void ArenaAllocator::Deallocate(void* p)
@@ -186,7 +164,6 @@ namespace EAllocKit
     inline void ArenaAllocator::Reset()
     {
         _pCurrent = _pMemory;
-        _allocationCount = 0;
     }
     
     inline ArenaAllocator::Checkpoint ArenaAllocator::SaveCheckpoint() const
@@ -229,13 +206,6 @@ namespace EAllocKit
         return _capacity - GetUsedBytes();
     }
     
-    inline double ArenaAllocator::GetUtilization() const
-    {
-        if (_capacity == 0) 
-            return 0.0;
-        return static_cast<double>(GetUsedBytes()) / static_cast<double>(_capacity);
-    }
-    
     inline bool ArenaAllocator::ContainsPointer(const void* ptr) const
     {
         if (!ptr) 
@@ -255,11 +225,6 @@ namespace EAllocKit
     inline void* ArenaAllocator::GetCurrentPtr() const
     {
         return _pCurrent;
-    }
-    
-    inline size_t ArenaAllocator::GetAllocationCount() const
-    {
-        return _allocationCount;
     }
     
     inline bool ArenaAllocator::IsEmpty() const

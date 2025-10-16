@@ -2,6 +2,7 @@
 #include "doctest/doctest.h"
 #include "EAllocKit/ArenaAllocator.hpp"
 #include <vector>
+#include "Helper.h"
 
 using namespace EAllocKit;
 
@@ -45,33 +46,21 @@ TEST_CASE("ArenaAllocator Basic Allocation")
         void* ptr1 = arena.Allocate(100);
         CHECK(ptr1 != nullptr);
         CHECK(arena.GetUsedBytes() >= 100);
-        CHECK(arena.GetAllocationCount() == 1);
         CHECK_FALSE(arena.IsEmpty());
         CHECK(arena.ContainsPointer(ptr1));
         
         void* ptr2 = arena.Allocate(200);
         CHECK(ptr2 != nullptr);
         CHECK(ptr2 != ptr1);
-        CHECK(arena.GetAllocationCount() == 2);
     }
     
     SUBCASE("Zero size allocation returns nullptr") {
         void* ptr = arena.Allocate(0);
         CHECK(ptr == nullptr);
-        CHECK(arena.GetAllocationCount() == 0);
-    }
-    
-    SUBCASE("Allocation with specific alignment") {
-        void* ptr = arena.Allocate(64, 32);
-        CHECK(ptr != nullptr);
-        CHECK(reinterpret_cast<uintptr_t>(ptr) % 32 == 0);
-        CHECK(arena.ContainsPointer(ptr));
     }
     
     SUBCASE("Invalid alignment returns nullptr") {
-        void* ptr = arena.Allocate(64, 3); // Not power of 2
-        CHECK(ptr == nullptr);
-        CHECK(arena.GetAllocationCount() == 0);
+        CHECK_THROWS_AS(arena.Allocate(64, 3), std::invalid_argument);
     }
     
     SUBCASE("Arena exhaustion") {
@@ -100,40 +89,25 @@ TEST_CASE("ArenaAllocator Typed Allocation")
     ArenaAllocator arena(1024, 8);
     
     SUBCASE("Single object allocation") {
-        TestObject* obj = arena.Allocate<TestObject>();
+        TestObject* obj = New<TestObject>(arena);
         CHECK(obj != nullptr);
         CHECK(obj->value == 42); // Default constructor called
         CHECK(arena.ContainsPointer(obj));
     }
     
     SUBCASE("Single object with constructor arguments") {
-        TestObject* obj = arena.Allocate<TestObject>(1, 999);
+        TestObject* obj = New<TestObject>(arena, 999);
         CHECK(obj != nullptr);
         CHECK(obj->value == 999);
     }
     
-    SUBCASE("Multiple objects allocation") {
-        TestObject* objs = arena.Allocate<TestObject>(5, 123);
-        CHECK(objs != nullptr);
-        
-        for (int i = 0; i < 5; ++i) {
-            CHECK(objs[i].value == 123);
-        }
-        
-        CHECK(arena.ContainsPointer(objs));
-        CHECK(arena.ContainsPointer(&objs[4]));
-    }
-    
     SUBCASE("Aligned object allocation") {
-        AlignedObject* obj = arena.Allocate<AlignedObject>();
-        CHECK(obj != nullptr);
-        CHECK(reinterpret_cast<uintptr_t>(obj) % 64 == 0);
+        void* ptr = arena.Allocate(sizeof(AlignedObject), 64);
+        CHECK(ptr != nullptr);
+        CHECK(reinterpret_cast<uintptr_t>(ptr) % 64 == 0);
+        // Construct object in place
+        AlignedObject* obj = new (AllocatorMarker(), ptr) AlignedObject();
         CHECK(obj->value == 100);
-    }
-    
-    SUBCASE("Zero count returns nullptr") {
-        TestObject* obj = arena.Allocate<TestObject>(0);
-        CHECK(obj == nullptr);
     }
 }
 
@@ -144,13 +118,12 @@ TEST_CASE("ArenaAllocator Reset Functionality")
     // Make some allocations
     void* ptr1 = arena.Allocate(100);
     void* ptr2 = arena.Allocate(200);
-    TestObject* obj = arena.Allocate<TestObject>();
+    TestObject* obj = New<TestObject>(arena);
     
     CHECK(ptr1 != nullptr);
     CHECK(ptr2 != nullptr);  
     CHECK(obj != nullptr);
     CHECK(arena.GetUsedBytes() > 0);
-    CHECK(arena.GetAllocationCount() == 3);
     CHECK_FALSE(arena.IsEmpty());
     
     // Reset arena
@@ -158,13 +131,11 @@ TEST_CASE("ArenaAllocator Reset Functionality")
     
     CHECK(arena.GetUsedBytes() == 0);
     CHECK(arena.GetRemainingBytes() == 1024);
-    CHECK(arena.GetAllocationCount() == 0);
     CHECK(arena.IsEmpty());
     
     // Should be able to allocate again
     void* new_ptr = arena.Allocate(100);
     CHECK(new_ptr != nullptr);
-    CHECK(arena.GetAllocationCount() == 1);
 }
 
 TEST_CASE("ArenaAllocator Checkpoint and Restore")
@@ -180,7 +151,6 @@ TEST_CASE("ArenaAllocator Checkpoint and Restore")
         void* ptr2 = arena.Allocate(200);
         
         size_t used_before = arena.GetUsedBytes();
-        size_t count_before = arena.GetAllocationCount();
         
         // Save checkpoint
         auto checkpoint = arena.SaveCheckpoint();
@@ -191,13 +161,12 @@ TEST_CASE("ArenaAllocator Checkpoint and Restore")
         void* ptr4 = arena.Allocate(150);
         
         CHECK(arena.GetUsedBytes() > used_before);
-        CHECK(arena.GetAllocationCount() > count_before);
         
         // Restore to checkpoint
         arena.RestoreCheckpoint(checkpoint);
         
         CHECK(arena.GetUsedBytes() == used_before);
-        // Note: allocation count is cumulative and not restored
+        // Note: allocation count is cumulative and not tracked by ArenaAllocator
         
         // Should be able to allocate again from checkpoint point
         void* new_ptr = arena.Allocate(50);
@@ -328,15 +297,12 @@ TEST_CASE("ArenaAllocator Memory Information and Statistics")
         CHECK(arena.GetCapacity() == 1024);
         CHECK(arena.GetUsedBytes() == 0);
         CHECK(arena.GetRemainingBytes() == 1024);
-        CHECK(arena.GetUtilization() == 0.0);
         
         void* ptr = arena.Allocate(512);
         CHECK(ptr != nullptr);
         
         CHECK(arena.GetUsedBytes() >= 512);
         CHECK(arena.GetRemainingBytes() <= 512);
-        CHECK(arena.GetUtilization() > 0.0);
-        CHECK(arena.GetUtilization() <= 1.0);
     }
     
     SUBCASE("Pointer containment check") {
@@ -374,7 +340,6 @@ TEST_CASE("ArenaAllocator Deallocation No-Op")
     void* ptr2 = arena.Allocate(200);
     
     size_t used_before = arena.GetUsedBytes();
-    size_t count_before = arena.GetAllocationCount();
     
     // Deallocate should be no-op
     arena.Deallocate(ptr1);
@@ -383,7 +348,6 @@ TEST_CASE("ArenaAllocator Deallocation No-Op")
     
     // Nothing should change
     CHECK(arena.GetUsedBytes() == used_before);
-    CHECK(arena.GetAllocationCount() == count_before);
     
     // Pointers should still be valid (arena memory unchanged)
     CHECK(arena.ContainsPointer(ptr1));

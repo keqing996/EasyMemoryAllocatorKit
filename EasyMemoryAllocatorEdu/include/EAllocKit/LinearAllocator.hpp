@@ -16,13 +16,13 @@ namespace EAllocKit
         LinearAllocator(LinearAllocator&& rhs) = delete;
 
     public:
-        void* Allocate(size_t size);
-        void* Allocate(size_t size, size_t alignment);
-        void Deallocate(void* p);
-        void Reset();
-        void* GetMemoryBlockPtr() const;
-        void* GetCurrentPtr() const;
-        size_t GetAvailableSpaceSize() const;
+        auto Allocate(size_t size) -> void*;
+        auto Allocate(size_t size, size_t alignment) -> void*;
+        auto Deallocate(void* p) -> void;
+        auto Reset() -> void;
+        auto GetMemoryBlockPtr() const -> void*;
+        auto GetCurrentPtr() const -> void*;
+        auto GetAvailableSpaceSize() const -> size_t;
 
     private: // Util functions
         static bool IsPowerOfTwo(size_t value)
@@ -61,12 +61,12 @@ namespace EAllocKit
         _pData = nullptr;
     }
 
-    inline void* LinearAllocator::Allocate(size_t size)
+    inline auto LinearAllocator::Allocate(size_t size) -> void*
     {
         return Allocate(size, _defaultAlignment);
     }
 
-    inline void* LinearAllocator::Allocate(size_t size, size_t alignment)
+    inline auto LinearAllocator::Allocate(size_t size, size_t alignment) -> void*
     {
         if (!IsPowerOfTwo(alignment))
             throw std::invalid_argument("LinearAllocator only supports power-of-2 alignments");
@@ -88,27 +88,27 @@ namespace EAllocKit
         return result;
     }
 
-    inline void LinearAllocator::Deallocate(void* p)
+    inline auto LinearAllocator::Deallocate(void* p) -> void
     {
         // do nothing
     }
 
-    inline void LinearAllocator::Reset()
+    inline auto LinearAllocator::Reset() -> void
     {
         _pCurrent = _pData;
     }
 
-    inline void* LinearAllocator::GetMemoryBlockPtr() const
+    inline auto LinearAllocator::GetMemoryBlockPtr() const -> void*
     {
         return _pData;
     }
 
-    inline void* LinearAllocator::GetCurrentPtr() const
+    inline auto LinearAllocator::GetCurrentPtr() const -> void*
     {
         return _pCurrent;
     }
 
-    inline size_t LinearAllocator::GetAvailableSpaceSize() const
+    inline auto LinearAllocator::GetAvailableSpaceSize() const -> size_t
     {
         return _pData + _size - _pCurrent;
     }
