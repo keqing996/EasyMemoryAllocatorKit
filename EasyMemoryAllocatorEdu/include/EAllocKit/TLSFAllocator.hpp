@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <new>
 #include <cstdlib>
 #include <stdexcept>
@@ -481,19 +482,19 @@ namespace EAllocKit
             return reinterpret_cast<BlockHeader*>(nextAddr);
         }
         
-        static void StoreDistance(void* userPtr, uint32_t distance)
+        static auto StoreDistance(void* userPtr, uint32_t distance)
         {
             uint32_t* distPtr = static_cast<uint32_t*>(PtrOffsetBytes(userPtr, -4));
             *distPtr = distance;
         }
 
-        static uint32_t ReadDistance(void* userPtr)
+        static auto ReadDistance(void* userPtr)
         {
             uint32_t* distPtr = static_cast<uint32_t*>(PtrOffsetBytes(userPtr, -4));
             return *distPtr;
         }
 
-        static BlockHeader* GetHeaderFromUserPtr(void* userPtr)
+        static auto GetHeaderFromUserPtr(void* userPtr)
         {
             uint32_t distance = ReadDistance(userPtr);
             return static_cast<BlockHeader*>(PtrOffsetBytes(userPtr, -static_cast<std::ptrdiff_t>(distance)));
@@ -508,7 +509,7 @@ namespace EAllocKit
             return blockStartAddr >= dataBeginAddr && blockEndAddr < dataEndAddr;
         }
         
-        static size_t FindFirstSetBit(uint32_t value)
+        static auto FindFirstSetBit(uint32_t value) -> size_t
         {
             if (value == 0) return 32;
             
@@ -525,29 +526,29 @@ namespace EAllocKit
     private: // Util functions and constants
         static constexpr size_t HIGHEST_BIT_MASK = static_cast<size_t>(1) << (sizeof(size_t) * 8 - 1);
         
-        static bool IsPowerOfTwo(size_t value)
+        static auto IsPowerOfTwo(size_t value)
         {
             return value > 0 && (value & (value - 1)) == 0;
         }
 
-        static size_t UpAlignment(size_t size, size_t alignment)
+        static auto UpAlignment(size_t size, size_t alignment)
         {
             return (size + alignment - 1) & ~(alignment - 1);
         }
 
         template <typename T>
-        static size_t ToAddr(const T* p)
+        static auto ToAddr(const T* p)
         {
             return reinterpret_cast<size_t>(p);
         }
 
         template <typename T>
-        static T* PtrOffsetBytes(T* ptr, std::ptrdiff_t offset)
+        static auto PtrOffsetBytes(T* ptr, std::ptrdiff_t offset)
         {
             return reinterpret_cast<T*>(static_cast<uint8_t*>(static_cast<void*>(ptr)) + offset);
         }
         
-        static size_t Log2(size_t value)
+        static auto Log2(size_t value)
         {
             size_t result = 0;
             while (value >>= 1)

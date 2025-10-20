@@ -28,32 +28,32 @@ namespace EAllocKit
         BuddyAllocator(BuddyAllocator&& rhs) = delete;
         
     public:
-        void* Allocate(size_t size);
-        void* Allocate(size_t size, size_t alignment);
-        void Deallocate(void* ptr);
-        void* GetMemoryBlockPtr() const { return _pData; }
-        size_t GetTotalSize() const { return _size; }
+        auto Allocate(size_t size) -> void*;
+        auto Allocate(size_t size, size_t alignment) -> void*;
+        auto Deallocate(void* ptr) -> void;
+        auto GetMemoryBlockPtr() const -> void* { return _pData; }
+        auto GetTotalSize() const -> size_t { return _size; }
         
     private:
-        size_t GetOrderFromSize(size_t size) const;
-        size_t GetSizeFromOrder(size_t order) const;
-        void* GetBuddy(void* block, size_t order);
-        size_t GetBlockIndex(void* block) const;
-        void* GetBlockFromIndex(size_t index) const;
-        bool IsBlockFree(size_t index, size_t order) const;
-        void MarkBlockUsed(size_t index, size_t order);
-        void MarkBlockFree(size_t index, size_t order);
-        void SplitBlock(size_t order);
-        void* AllocateBlock(size_t order);
-        void DeallocateBlock(void* ptr, size_t order);
+        auto GetOrderFromSize(size_t size) const -> size_t;
+        auto GetSizeFromOrder(size_t order) const -> size_t;
+        auto GetBuddy(void* block, size_t order) -> void*;
+        auto GetBlockIndex(void* block) const -> size_t;
+        auto GetBlockFromIndex(size_t index) const -> void*;
+        auto IsBlockFree(size_t index, size_t order) const -> bool;
+        auto MarkBlockUsed(size_t index, size_t order) -> void;
+        auto MarkBlockFree(size_t index, size_t order) -> void;
+        auto SplitBlock(size_t order) -> void;
+        auto AllocateBlock(size_t order) -> void*;
+        auto DeallocateBlock(void* ptr, size_t order) -> void;
         
     private: // Util functions
-        static bool IsPowerOfTwo(size_t value)
+        static auto IsPowerOfTwo(size_t value) -> bool
         {
             return value > 0 && (value & (value - 1)) == 0;
         }
 
-        static size_t RoundUpToPowerOf2(size_t size)
+        static auto RoundUpToPowerOf2(size_t size) -> size_t
         {
             if (size == 0)
                 return 1;
@@ -73,7 +73,7 @@ namespace EAllocKit
             return size;
         }
         
-        static size_t Log2(size_t value)
+        static auto Log2(size_t value) -> size_t
         {
             size_t result = 0;
             while (value >>= 1)
@@ -141,12 +141,12 @@ namespace EAllocKit
             ::free(_pData);
     }
     
-    inline void* BuddyAllocator::Allocate(size_t size)
+    inline auto BuddyAllocator::Allocate(size_t size) -> void*
     {
         return Allocate(size, _defaultAlignment);
     }
     
-    inline void* BuddyAllocator::Allocate(size_t size, size_t alignment)
+    inline auto BuddyAllocator::Allocate(size_t size, size_t alignment) -> void*
     {
         if (size == 0)
             return nullptr;
@@ -204,7 +204,7 @@ namespace EAllocKit
         return block;
     }
     
-    inline void BuddyAllocator::Deallocate(void* ptr)
+    inline auto BuddyAllocator::Deallocate(void* ptr) -> void
     {
         if (!ptr)
             return;
@@ -232,17 +232,17 @@ namespace EAllocKit
         }
     }
     
-    inline size_t BuddyAllocator::GetOrderFromSize(size_t size) const
+    inline auto BuddyAllocator::GetOrderFromSize(size_t size) const -> size_t
     {
         return Log2(size / MIN_BLOCK_SIZE);
     }
     
-    inline size_t BuddyAllocator::GetSizeFromOrder(size_t order) const
+    inline auto BuddyAllocator::GetSizeFromOrder(size_t order) const -> size_t
     {
         return MIN_BLOCK_SIZE << order;
     }
     
-    inline void* BuddyAllocator::GetBuddy(void* block, size_t order)
+    inline auto BuddyAllocator::GetBuddy(void* block, size_t order) -> void*
     {
         uintptr_t addr = reinterpret_cast<uintptr_t>(block);
         uintptr_t base = reinterpret_cast<uintptr_t>(_pData);
@@ -255,19 +255,19 @@ namespace EAllocKit
         return reinterpret_cast<void*>(base + buddyOffset);
     }
     
-    inline size_t BuddyAllocator::GetBlockIndex(void* block) const
+    inline auto BuddyAllocator::GetBlockIndex(void* block) const -> size_t
     {
         uintptr_t addr = reinterpret_cast<uintptr_t>(block);
         uintptr_t base = reinterpret_cast<uintptr_t>(_pData);
         return (addr - base) / MIN_BLOCK_SIZE;
     }
     
-    inline void* BuddyAllocator::GetBlockFromIndex(size_t index) const
+    inline auto BuddyAllocator::GetBlockFromIndex(size_t index) const -> void*
     {
         return static_cast<uint8_t*>(_pData) + (index * MIN_BLOCK_SIZE);
     }
     
-    inline bool BuddyAllocator::IsBlockFree(size_t index, size_t order) const
+    inline auto BuddyAllocator::IsBlockFree(size_t index, size_t order) const -> bool
     {
         size_t byteIndex = index / 8;
         size_t bitIndex = index % 8;
@@ -278,7 +278,7 @@ namespace EAllocKit
         return (_blockStatus[byteIndex] & (1 << bitIndex)) == 0;
     }
     
-    inline void BuddyAllocator::MarkBlockUsed(size_t index, size_t order)
+    inline auto BuddyAllocator::MarkBlockUsed(size_t index, size_t order) -> void
     {
         size_t blockSize = GetSizeFromOrder(order);
         size_t numMinBlocks = blockSize / MIN_BLOCK_SIZE;
@@ -294,7 +294,7 @@ namespace EAllocKit
         }
     }
     
-    inline void BuddyAllocator::MarkBlockFree(size_t index, size_t order)
+    inline auto BuddyAllocator::MarkBlockFree(size_t index, size_t order) -> void
     {
         size_t blockSize = GetSizeFromOrder(order);
         size_t numMinBlocks = blockSize / MIN_BLOCK_SIZE;
@@ -310,7 +310,7 @@ namespace EAllocKit
         }
     }
     
-    inline void BuddyAllocator::SplitBlock(size_t order)
+    inline auto BuddyAllocator::SplitBlock(size_t order) -> void
     {
         if (order >= _maxOrder - 1)
             return;
@@ -339,7 +339,7 @@ namespace EAllocKit
         _freeLists[order] = block;
     }
     
-    inline void* BuddyAllocator::AllocateBlock(size_t order)
+    inline auto BuddyAllocator::AllocateBlock(size_t order) -> void*
     {
         if (order >= _maxOrder)
             return nullptr;
@@ -364,7 +364,7 @@ namespace EAllocKit
         return block;
     }
     
-    inline void BuddyAllocator::DeallocateBlock(void* ptr, size_t order)
+    inline auto BuddyAllocator::DeallocateBlock(void* ptr, size_t order) -> void
     {
         if (!ptr || order >= _maxOrder)
             return;

@@ -15,7 +15,7 @@ void AllocateAndDelete(size_t* alreadyAllocateSize, LinearAllocator* pAllocator)
     void* pMemBlock = pAllocator->GetMemoryBlockPtr();
     void* pCurrentBefore = pAllocator->GetCurrentPtr();
 
-    T* ptr = Alloc::New<T>(pAllocator);
+    T* ptr = New<T>(*pAllocator);
 
     size_t leftAvailableSize = pAllocator->GetAvailableSpaceSize();
     void* pCurrentAfter = pAllocator->GetCurrentPtr();
@@ -34,7 +34,7 @@ void AllocateAndDelete(size_t* alreadyAllocateSize, LinearAllocator* pAllocator)
         CHECK(ToAddr(pCurrentAfter) == ToAddr(pMemBlock) + *alreadyAllocateSize);
         CHECK(reinterpret_cast<size_t>(ptr) % alignment == 0); // Check alignment
 
-        Alloc::Delete(pAllocator, ptr);
+        Delete(*pAllocator, ptr);
 
         // LinearAllocator doesn't actually free memory on Delete
         CHECK(ToAddr(pCurrentAfter) == ToAddr(pMemBlock) + *alreadyAllocateSize);
@@ -82,8 +82,8 @@ TEST_CASE("LinearAllocator - Reset Functionality")
     {
         LinearAllocator allocator(1024, 8);
         
-        auto* p1 = Alloc::New<Data64B>(&allocator);
-        auto* p2 = Alloc::New<Data64B>(&allocator);
+        auto* p1 = New<Data64B>(allocator);
+        auto* p2 = New<Data64B>(allocator);
         
         CHECK(p1 != nullptr);
         CHECK(p2 != nullptr);
@@ -94,7 +94,7 @@ TEST_CASE("LinearAllocator - Reset Functionality")
         allocator.Reset();
         
         // Allocate again - should reuse from beginning
-        auto* p3 = Alloc::New<Data64B>(&allocator);
+        auto* p3 = New<Data64B>(allocator);
         CHECK(p3 == firstPtr);
     }
     
@@ -108,7 +108,7 @@ TEST_CASE("LinearAllocator - Reset Functionality")
             
             for (int i = 0; i < 10; i++)
             {
-                auto* p = Alloc::New<Data64B>(&allocator);
+                auto* p = New<Data64B>(allocator);
                 CHECK(p != nullptr);
                 ptrs.push_back(p);
             }
@@ -122,14 +122,14 @@ TEST_CASE("LinearAllocator - Reset Functionality")
     {
         LinearAllocator allocator(1024, 8);
         
-        auto* p1 = Alloc::New<uint32_t>(&allocator);
+        auto* p1 = New<uint32_t>(allocator);
         size_t availableAfterOne = allocator.GetAvailableSpaceSize();
         
         allocator.Reset();
         
         CHECK(allocator.GetAvailableSpaceSize() == 1024);
         
-        auto* p2 = Alloc::New<uint32_t>(&allocator);
+        auto* p2 = New<uint32_t>(allocator);
         CHECK(allocator.GetAvailableSpaceSize() == availableAfterOne);
     }
 }
@@ -143,7 +143,7 @@ TEST_CASE("LinearAllocator - Memory Exhaustion")
         std::vector<uint32_t*> ptrs;
         while (true)
         {
-            auto* p = Alloc::New<uint32_t>(&allocator);
+            auto* p = New<uint32_t>(allocator);
             if (!p) break;
             ptrs.push_back(p);
         }
@@ -152,12 +152,12 @@ TEST_CASE("LinearAllocator - Memory Exhaustion")
         CHECK(allocator.GetAvailableSpaceSize() < sizeof(uint32_t) + 8);
         
         // Try one more - should fail
-        auto* p = Alloc::New<uint32_t>(&allocator);
+        auto* p = New<uint32_t>(allocator);
         CHECK(p == nullptr);
         
         // Reset and verify we can allocate again
         allocator.Reset();
-        auto* p2 = Alloc::New<uint32_t>(&allocator);
+        auto* p2 = New<uint32_t>(allocator);
         CHECK(p2 != nullptr);
     }
     
@@ -167,11 +167,11 @@ TEST_CASE("LinearAllocator - Memory Exhaustion")
         
         // Data128B is exactly 128 bytes, which should fit in a 128-byte pool
         // But a 129-byte object or larger should fail
-        auto* p = Alloc::New<Data128B>(&allocator);
+        auto* p = New<Data128B>(allocator);
         CHECK(p != nullptr); // Should succeed - exact fit
         
         // After allocating 128 bytes, no space left
-        auto* p2 = Alloc::New<uint32_t>(&allocator);
+        auto* p2 = New<uint32_t>(allocator);
         CHECK(p2 == nullptr); // Should fail - no space left
         
         // Reset and try allocating something larger than pool
@@ -194,7 +194,7 @@ TEST_CASE("LinearAllocator - Memory Exhaustion")
         std::vector<uint32_t*> ptrs;
         while (allocator.GetAvailableSpaceSize() >= sizeof(uint32_t))
         {
-            auto* p = Alloc::New<uint32_t>(&allocator);
+            auto* p = New<uint32_t>(allocator);
             if (p) ptrs.push_back(p);
             else break;
         }
@@ -209,11 +209,11 @@ TEST_CASE("LinearAllocator - Different Sizes")
     {
         LinearAllocator allocator(2048, 8);
         
-        auto* p1 = Alloc::New<uint32_t>(&allocator);
-        auto* p2 = Alloc::New<uint64_t>(&allocator);
-        auto* p3 = Alloc::New<Data64B>(&allocator);
-        auto* p4 = Alloc::New<Data128B>(&allocator);
-        auto* p5 = Alloc::New<Data32B>(&allocator);
+        auto* p1 = New<uint32_t>(allocator);
+        auto* p2 = New<uint64_t>(allocator);
+        auto* p3 = New<Data64B>(allocator);
+        auto* p4 = New<Data128B>(allocator);
+        auto* p5 = New<Data32B>(allocator);
         
         CHECK(p1 != nullptr);
         CHECK(p2 != nullptr);
@@ -237,10 +237,10 @@ TEST_CASE("LinearAllocator - Different Sizes")
         {
             switch (i % 4)
             {
-                case 0: ptrs.push_back(Alloc::New<uint32_t>(&allocator)); break;
-                case 1: ptrs.push_back(Alloc::New<Data64B>(&allocator)); break;
-                case 2: ptrs.push_back(Alloc::New<Data32B>(&allocator)); break;
-                case 3: ptrs.push_back(Alloc::New<uint64_t>(&allocator)); break;
+                case 0: ptrs.push_back(New<uint32_t>(allocator)); break;
+                case 1: ptrs.push_back(New<Data64B>(allocator)); break;
+                case 2: ptrs.push_back(New<Data32B>(allocator)); break;
+                case 3: ptrs.push_back(New<uint64_t>(allocator)); break;
             }
             CHECK(ptrs.back() != nullptr);
         }
@@ -255,7 +255,7 @@ TEST_CASE("LinearAllocator - Alignment Verification")
         
         for (int i = 0; i < 20; i++)
         {
-            auto* p = Alloc::New<uint64_t>(&allocator);
+            auto* p = New<uint64_t>(allocator);
             CHECK(p != nullptr);
             CHECK(reinterpret_cast<size_t>(p) % 8 == 0);
         }
@@ -265,13 +265,13 @@ TEST_CASE("LinearAllocator - Alignment Verification")
     {
         {
             LinearAllocator allocator(1024, 8);
-            auto* p = Alloc::New<uint32_t>(&allocator);
+            auto* p = New<uint32_t>(allocator);
             CHECK(reinterpret_cast<size_t>(p) % 4 == 0);
         }
         
         {
             LinearAllocator allocator(1024, 16);
-            auto* p = Alloc::New<Data128B>(&allocator);
+            auto* p = New<Data128B>(allocator);
             CHECK(reinterpret_cast<size_t>(p) % 16 == 0);
         }
     }
@@ -283,10 +283,10 @@ TEST_CASE("LinearAllocator - Edge Cases")
     {
         LinearAllocator allocator(32, 8);
         
-        auto* p1 = Alloc::New<uint32_t>(&allocator);
+        auto* p1 = New<uint32_t>(allocator);
         CHECK(p1 != nullptr);
         
-        auto* p2 = Alloc::New<uint32_t>(&allocator);
+        auto* p2 = New<uint32_t>(allocator);
         // May or may not succeed depending on overhead
     }
     
@@ -294,10 +294,10 @@ TEST_CASE("LinearAllocator - Edge Cases")
     {
         LinearAllocator allocator(1024, 8);
         
-        auto* p1 = Alloc::New<Data64B>(&allocator);
+        auto* p1 = New<Data64B>(allocator);
         size_t before = allocator.GetAvailableSpaceSize();
         
-        Alloc::Delete(&allocator, p1);
+        Delete(allocator, p1);
         
         size_t after = allocator.GetAvailableSpaceSize();
         CHECK(before == after); // Delete should not affect linear allocator
@@ -307,8 +307,8 @@ TEST_CASE("LinearAllocator - Edge Cases")
     {
         LinearAllocator allocator(2048, 8);
         
-        auto* p1 = Alloc::New<uint32_t>(&allocator);
-        auto* p2 = Alloc::New<uint32_t>(&allocator);
+        auto* p1 = New<uint32_t>(allocator);
+        auto* p2 = New<uint32_t>(allocator);
         
         *p1 = 12345;
         *p2 = 67890;

@@ -14,7 +14,7 @@ void AllocateAndDelete(size_t* alreadyAllocateSize, FrameAllocator<N>* pAllocato
     void* pFramePtr = pAllocator->GetCurrentFramePtr();
     int currentFrameIndex = pAllocator->GetCurrentFrameIndex();
 
-    T* ptr = Alloc::New<T>(pAllocator);
+    T* ptr = New<T>(*pAllocator);
 
     size_t availableSizeAfter = pAllocator->GetCurrentFrameAvailableSpace();
     
@@ -30,7 +30,7 @@ void AllocateAndDelete(size_t* alreadyAllocateSize, FrameAllocator<N>* pAllocato
         CHECK(reinterpret_cast<size_t>(ptr) % alignment == 0); // Check alignment
         CHECK(pAllocator->GetCurrentFrameIndex() == currentFrameIndex); // Frame index shouldn't change
 
-        Alloc::Delete(pAllocator, ptr);
+        Delete(*pAllocator, ptr);
 
         // FrameAllocator doesn't actually free memory on Delete
         CHECK(pAllocator->GetCurrentFrameAvailableSpace() == availableSizeAfter);
@@ -89,21 +89,21 @@ TEST_CASE("FrameAllocator - N-Buffer Support")
         CHECK(allocator.GetCurrentFrameIndex() == 0);
         
         // Allocate in frame 0
-        auto* p0 = Alloc::New<Data64B>(&allocator);
+        auto* p0 = New<Data64B>(allocator);
         CHECK(p0 != nullptr);
         CHECK(allocator.GetCurrentFrameIndex() == 0);
         
         // Swap to frame 1
         allocator.SwapFrames();
         CHECK(allocator.GetCurrentFrameIndex() == 1);
-        auto* p1 = Alloc::New<Data64B>(&allocator);
+        auto* p1 = New<Data64B>(allocator);
         CHECK(p1 != nullptr);
         CHECK(p1 != p0);
         
         // Swap to frame 2
         allocator.SwapFrames();
         CHECK(allocator.GetCurrentFrameIndex() == 2);
-        auto* p2 = Alloc::New<Data64B>(&allocator);
+        auto* p2 = New<Data64B>(allocator);
         CHECK(p2 != nullptr);
         CHECK(p2 != p0);
         CHECK(p2 != p1);
@@ -112,7 +112,7 @@ TEST_CASE("FrameAllocator - N-Buffer Support")
         allocator.SwapFrames();
         CHECK(allocator.GetCurrentFrameIndex() == 0);
         CHECK(allocator.GetCurrentFrameAvailableSpace() == 512); // Frame 0 should be reset
-        auto* p0_new = Alloc::New<Data64B>(&allocator);
+        auto* p0_new = New<Data64B>(allocator);
         CHECK(p0_new == p0); // Should reuse same memory location
     }
     
@@ -131,7 +131,7 @@ TEST_CASE("FrameAllocator - N-Buffer Support")
             unsigned int expectedFrameIndex = cycle % 4;
             CHECK(allocator.GetCurrentFrameIndex() == expectedFrameIndex);
             
-            auto* p = Alloc::New<uint32_t>(&allocator);
+            auto* p = New<uint32_t>(allocator);
             CHECK(p != nullptr);
             
             if (cycle < 4) // First cycle - store pointers
@@ -183,7 +183,7 @@ TEST_CASE("FrameAllocator - N-Buffer Support")
         }
         
         // Allocate in current frame
-        auto* p = Alloc::New<Data64B>(&allocator);
+        auto* p = New<Data64B>(allocator);
         CHECK(allocator.GetFrameAvailableSpace(0) < 256); // Current frame (0) should have less space
         
         // Other frames should still be full
@@ -207,7 +207,7 @@ TEST_CASE("FrameAllocator - Frame Swapping")
         CHECK(allocator.GetCurrentFrameIndex() == 0);
         
         // Allocate in frame 0
-        auto* p1 = Alloc::New<Data64B>(&allocator);
+        auto* p1 = New<Data64B>(allocator);
         CHECK(p1 != nullptr);
         
         size_t frame0UsedSpace = 1024 - allocator.GetCurrentFrameAvailableSpace();
@@ -219,7 +219,7 @@ TEST_CASE("FrameAllocator - Frame Swapping")
         CHECK(allocator.GetCurrentFrameAvailableSpace() == 1024); // New current frame should be empty
         
         // Allocate in frame 1
-        auto* p2 = Alloc::New<Data64B>(&allocator);
+        auto* p2 = New<Data64B>(allocator);
         CHECK(p2 != nullptr);
         CHECK(p2 != p1); // Should be in different frame
         
@@ -232,7 +232,7 @@ TEST_CASE("FrameAllocator - Frame Swapping")
         CHECK(allocator.GetCurrentFrameAvailableSpace() == 1024); // Frame 0 should be reset
         
         // Original allocation in frame 0 should be gone due to reset
-        auto* p3 = Alloc::New<Data64B>(&allocator);
+        auto* p3 = New<Data64B>(allocator);
         CHECK(p3 == p1); // Should reuse the same memory location
     }
     
@@ -250,7 +250,7 @@ TEST_CASE("FrameAllocator - Frame Swapping")
             
             while (true)
             {
-                auto* p = Alloc::New<Data32B>(&allocator);
+                auto* p = New<Data32B>(allocator);
                 if (!p) break;
                 
                 if (allocator.GetCurrentFrameIndex() == 0)
@@ -293,12 +293,12 @@ TEST_CASE("FrameAllocator - Reset Functionality")
         FrameAllocator<2> allocator(1024, 8);
         
         // Allocate in frame 0
-        auto* p1 = Alloc::New<Data64B>(&allocator);
+        auto* p1 = New<Data64B>(allocator);
         CHECK(p1 != nullptr);
         
         // Swap and allocate in frame 1
         allocator.SwapFrames();
-        auto* p2 = Alloc::New<Data64B>(&allocator);
+        auto* p2 = New<Data64B>(allocator);
         CHECK(p2 != nullptr);
         
         // Reset all
@@ -310,7 +310,7 @@ TEST_CASE("FrameAllocator - Reset Functionality")
         CHECK(allocator.GetPreviousFrameAvailableSpace() == 1024);
         
         // Should be able to allocate from beginning again
-        auto* p3 = Alloc::New<Data64B>(&allocator);
+        auto* p3 = New<Data64B>(allocator);
         CHECK(p3 == p1); // Should reuse frame 0's original location
     }
     
@@ -319,14 +319,14 @@ TEST_CASE("FrameAllocator - Reset Functionality")
         FrameAllocator<2> allocator(2048, 8);
         
         // Test reset in frame 0
-        auto* p1 = Alloc::New<Data64B>(&allocator);
+        auto* p1 = New<Data64B>(allocator);
         allocator.Reset();
         CHECK(allocator.GetCurrentFrameIndex() == 0);
         CHECK(allocator.GetCurrentFrameAvailableSpace() == 2048);
         
         // Test reset in frame 1
         allocator.SwapFrames();
-        auto* p2 = Alloc::New<Data64B>(&allocator);
+        auto* p2 = New<Data64B>(allocator);
         allocator.Reset();
         CHECK(allocator.GetCurrentFrameIndex() == 0);
         CHECK(allocator.GetCurrentFrameAvailableSpace() == 2048);
@@ -342,7 +342,7 @@ TEST_CASE("FrameAllocator - Memory Exhaustion")
         std::vector<uint32_t*> ptrs;
         while (true)
         {
-            auto* p = Alloc::New<uint32_t>(&allocator);
+            auto* p = New<uint32_t>(allocator);
             if (!p) break;
             ptrs.push_back(p);
         }
@@ -357,7 +357,7 @@ TEST_CASE("FrameAllocator - Memory Exhaustion")
         allocator.SwapFrames();
         CHECK(allocator.GetCurrentFrameAvailableSpace() == 1024);
         
-        auto* newPtr = Alloc::New<uint32_t>(&allocator);
+        auto* newPtr = New<uint32_t>(allocator);
         CHECK(newPtr != nullptr);
     }
     
@@ -368,7 +368,7 @@ TEST_CASE("FrameAllocator - Memory Exhaustion")
         // Fill frame 0
         while (allocator.GetCurrentFrameAvailableSpace() >= sizeof(Data32B))
         {
-            auto* p = Alloc::New<Data32B>(&allocator);
+            auto* p = New<Data32B>(allocator);
             CHECK(p != nullptr);
         }
         
@@ -378,7 +378,7 @@ TEST_CASE("FrameAllocator - Memory Exhaustion")
         // Fill frame 1
         while (allocator.GetCurrentFrameAvailableSpace() >= sizeof(Data32B))
         {
-            auto* p = Alloc::New<Data32B>(&allocator);
+            auto* p = New<Data32B>(allocator);
             CHECK(p != nullptr);
         }
         
@@ -456,7 +456,7 @@ TEST_CASE("FrameAllocator - Edge Cases")
         CHECK(allocator.GetCurrentFrameAvailableSpace() == 512);
         
         // Normal allocation should still work
-        auto* p2 = Alloc::New<uint32_t>(&allocator);
+        auto* p2 = New<uint32_t>(allocator);
         CHECK(p2 != nullptr);
     }
     
@@ -467,7 +467,7 @@ TEST_CASE("FrameAllocator - Edge Cases")
         // Perform many rapid swaps
         for (int i = 0; i < 100; i++)
         {
-            auto* p = Alloc::New<uint32_t>(&allocator);
+            auto* p = New<uint32_t>(allocator);
             CHECK(p != nullptr);
             
             allocator.SwapFrames();
@@ -503,7 +503,7 @@ TEST_CASE("FrameAllocator - Constructor Edge Cases")
         CHECK(tiny.GetFrameSize() == 8);
         CHECK(tiny.GetCurrentFrameAvailableSpace() == 8);
         
-        auto* p = Alloc::New<uint32_t>(&tiny);
+        auto* p = New<uint32_t>(tiny);
         CHECK(p != nullptr);
         CHECK(tiny.GetCurrentFrameAvailableSpace() < 8);
     }
@@ -518,13 +518,13 @@ TEST_CASE("FrameAllocator - Type Alias")
         CHECK(allocator.GetBufferCount() == 2);
         CHECK(allocator.GetFrameSize() == 1024);
         
-        auto* p1 = Alloc::New<Data32B>(&allocator);
+        auto* p1 = New<Data32B>(allocator);
         CHECK(p1 != nullptr);
         
         allocator.SwapFrames();
         CHECK(allocator.GetCurrentFrameIndex() == 1);
         
-        auto* p2 = Alloc::New<Data32B>(&allocator);
+        auto* p2 = New<Data32B>(allocator);
         CHECK(p2 != nullptr);
         CHECK(p2 != p1);
     }

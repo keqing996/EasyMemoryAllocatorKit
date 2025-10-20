@@ -35,39 +35,39 @@ namespace EAllocKit
         StackAllocator(StackAllocator&& rhs) = delete;
 
     public:
-        void* Allocate(size_t size);
-        void* Allocate(size_t size, size_t alignment);
-        void Deallocate();
-        void* GetStackTop() const;
-        bool IsStackTop(void* p) const;
+        auto Allocate(size_t size) -> void*;
+        auto Allocate(size_t size, size_t alignment) -> void*;
+        auto Deallocate() -> void;
+        auto GetStackTop() const -> void*;
+        auto IsStackTop(void* p) const -> bool;
 
     private: // Util functions
-        static bool IsPowerOfTwo(size_t value)
+        static auto IsPowerOfTwo(size_t value) -> bool
         {
             return value > 0 && (value & (value - 1)) == 0;
         }
 
-        static size_t UpAlignment(size_t size, size_t alignment)
+        static auto UpAlignment(size_t size, size_t alignment) -> size_t
         {
             return (size + alignment - 1) & ~(alignment - 1);
         }
 
         template <typename T>
-        static size_t ToAddr(const T* p)
+        static auto ToAddr(const T* p) -> size_t
         {
             return reinterpret_cast<size_t>(p);
         }
 
         template <typename T>
-        static T* PtrOffsetBytes(T* ptr, std::ptrdiff_t offset)
+        static auto PtrOffsetBytes(T* ptr, std::ptrdiff_t offset) -> T*
         {
             return reinterpret_cast<T*>(static_cast<uint8_t*>(static_cast<void*>(ptr)) + offset);
         }
 
     private:
-        static void StoreDistance(void* userPtr, uint32_t distance);
-        static uint32_t ReadDistance(void* userPtr);
-        static StackFrameHeader* GetHeaderFromUserPtr(void* userPtr);
+        static auto StoreDistance(void* userPtr, uint32_t distance) -> void;
+        static auto ReadDistance(void* userPtr) -> uint32_t;
+        static auto GetHeaderFromUserPtr(void* userPtr) -> StackFrameHeader*;
 
     private:
         uint8_t* _pData;
@@ -103,12 +103,12 @@ namespace EAllocKit
         _pData = nullptr;
     }
 
-    inline void* StackAllocator::Allocate(size_t size)
+    inline auto StackAllocator::Allocate(size_t size) -> void*
     {
         return Allocate(size, _defaultAlignment);
     }
 
-    inline void* StackAllocator::Allocate(size_t size, size_t alignment)
+    inline auto StackAllocator::Allocate(size_t size, size_t alignment) -> void*
     {
         if (!IsPowerOfTwo(alignment))
             throw std::invalid_argument("StackAllocator only supports power-of-2 alignments");
@@ -158,7 +158,7 @@ namespace EAllocKit
         return pAlignedUserData;
     }
 
-    inline void StackAllocator::Deallocate()
+    inline auto StackAllocator::Deallocate() -> void
     {
         if (_pStackTop == nullptr)
             return;  // Stack is empty
@@ -173,12 +173,12 @@ namespace EAllocKit
         _pStackTop = static_cast<uint8_t*>(pPrevUserData);
     }
 
-    inline void* StackAllocator::GetStackTop() const
+    inline auto StackAllocator::GetStackTop() const -> void*
     {
         return _pStackTop;
     }
 
-    inline bool StackAllocator::IsStackTop(void* p) const
+    inline auto StackAllocator::IsStackTop(void* p) const -> bool
     {
         if (_pStackTop == nullptr || p == nullptr)
             return false;
@@ -187,19 +187,19 @@ namespace EAllocKit
         return p == _pStackTop;
     }
 
-    inline void StackAllocator::StoreDistance(void* userPtr, uint32_t distance)
+    inline auto StackAllocator::StoreDistance(void* userPtr, uint32_t distance) -> void
     {
         uint32_t* distPtr = static_cast<uint32_t*>(PtrOffsetBytes(userPtr, -4));
         *distPtr = distance;
     }
 
-    inline uint32_t StackAllocator::ReadDistance(void* userPtr)
+    inline auto StackAllocator::ReadDistance(void* userPtr) -> uint32_t
     {
         uint32_t* distPtr = static_cast<uint32_t*>(PtrOffsetBytes(userPtr, -4));
         return *distPtr;
     }
 
-    inline StackAllocator::StackFrameHeader* StackAllocator::GetHeaderFromUserPtr(void* userPtr)
+    inline auto StackAllocator::GetHeaderFromUserPtr(void* userPtr) -> StackFrameHeader*
     {
         uint32_t distance = ReadDistance(userPtr);
         return static_cast<StackFrameHeader*>(PtrOffsetBytes(userPtr, -static_cast<std::ptrdiff_t>(distance)));

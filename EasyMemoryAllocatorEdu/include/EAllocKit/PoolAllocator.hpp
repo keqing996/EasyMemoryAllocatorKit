@@ -20,30 +20,30 @@ namespace EAllocKit
         PoolAllocator(PoolAllocator&& rhs) = delete;
 
     public:
-        void* Allocate();
-        void Deallocate(void* p);
-        size_t GetAvailableBlockCount() const;
-        Node* GetFreeListHeadNode() const;
+        auto Allocate() -> void*;
+        auto Deallocate(void* p) -> void;
+        auto GetAvailableBlockCount() const -> size_t;
+        auto GetFreeListHeadNode() const -> Node*;
 
     private: // Util functions
-        static bool IsPowerOfTwo(size_t value)
+        static auto IsPowerOfTwo(size_t value) -> bool
         {
             return value > 0 && (value & (value - 1)) == 0;
         }
 
-        static size_t UpAlignment(size_t size, size_t alignment)
+        static auto UpAlignment(size_t size, size_t alignment) -> size_t
         {
             return (size + alignment - 1) & ~(alignment - 1);
         }
 
         template <typename T>
-        static size_t ToAddr(const T* p)
+        static auto ToAddr(const T* p) -> size_t
         {
             return reinterpret_cast<size_t>(p);
         }
 
         template <typename T>
-        static T* PtrOffsetBytes(T* ptr, std::ptrdiff_t offset)
+        static auto PtrOffsetBytes(T* ptr, std::ptrdiff_t offset) -> T*
         {
             return reinterpret_cast<T*>(static_cast<uint8_t*>(static_cast<void*>(ptr)) + offset);
         }
@@ -104,7 +104,7 @@ namespace EAllocKit
         }
     }
 
-    inline void* PoolAllocator::Allocate()
+    inline auto PoolAllocator::Allocate() -> void*
     {
         if (_pFreeBlockList == nullptr)
             return nullptr;
@@ -128,7 +128,7 @@ namespace EAllocKit
         return pAlignedUserData;
     }
 
-    inline void PoolAllocator::Deallocate(void* p)
+    inline auto PoolAllocator::Deallocate(void* p) -> void
     {
         if (p == nullptr)
             return; 
@@ -146,7 +146,7 @@ namespace EAllocKit
         _pFreeBlockList = pNode;
     }
 
-    inline size_t PoolAllocator::GetAvailableBlockCount() const
+    inline auto PoolAllocator::GetAvailableBlockCount() const -> size_t
     {
         size_t count = 0;
         Node* pCurrent = _pFreeBlockList;
@@ -159,7 +159,7 @@ namespace EAllocKit
         return count;
     }
 
-    inline PoolAllocator::Node* PoolAllocator::GetFreeListHeadNode() const
+    inline auto PoolAllocator::GetFreeListHeadNode() const -> Node*
     {
         return _pFreeBlockList;
     }
