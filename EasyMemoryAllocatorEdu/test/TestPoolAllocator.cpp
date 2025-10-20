@@ -41,7 +41,7 @@ void AllocateAndDelete()
     std::vector<T*> dataVec;
     for (size_t i = 0; i < num; i++)
     {
-        T* pData = Alloc::New<T>(&allocator);
+        T* pData = New<T>(allocator);
         dataVec.push_back(pData);
     }
 
@@ -54,7 +54,7 @@ void AllocateAndDelete()
     std::shuffle(dataVec.begin(), dataVec.end(), g);
 
     for (size_t i = 0; i < num; i++)
-        Alloc::Delete(&allocator, dataVec[i]);
+        Delete(allocator, dataVec[i]);
 
     CHECK(allocator.GetAvailableBlockCount() == num);
 }
@@ -77,7 +77,7 @@ TEST_CASE("PoolAllocator - Pool Exhaustion")
         std::vector<Data64B*> ptrs;
         for (int i = 0; i < 10; i++)
         {
-            auto* p = Alloc::New<Data64B>(&allocator);
+            auto* p = New<Data64B>(allocator);
             CHECK(p != nullptr);
             CHECK(allocator.GetAvailableBlockCount() == 10 - i - 1);
             ptrs.push_back(p);
@@ -86,14 +86,14 @@ TEST_CASE("PoolAllocator - Pool Exhaustion")
         CHECK(allocator.GetAvailableBlockCount() == 0);
         
         // Try to allocate when pool is full
-        auto* p = Alloc::New<Data64B>(&allocator);
+        auto* p = New<Data64B>(allocator);
         CHECK(p == nullptr);
         
         // Free one and retry
-        Alloc::Delete(&allocator, ptrs[0]);
+        Delete(allocator, ptrs[0]);
         CHECK(allocator.GetAvailableBlockCount() == 1);
         
-        auto* p2 = Alloc::New<Data64B>(&allocator);
+        auto* p2 = New<Data64B>(allocator);
         CHECK(p2 != nullptr);
         CHECK(allocator.GetAvailableBlockCount() == 0);
         
@@ -101,7 +101,7 @@ TEST_CASE("PoolAllocator - Pool Exhaustion")
         ptrs[0] = p2;
         for (auto* ptr : ptrs)
         {
-            Alloc::Delete(&allocator, ptr);
+            Delete(allocator, ptr);
         }
     }
     
@@ -115,7 +115,7 @@ TEST_CASE("PoolAllocator - Pool Exhaustion")
             
             for (int i = 0; i < 50; i++)
             {
-                auto* p = Alloc::New<uint32_t>(&allocator);
+                auto* p = New<uint32_t>(allocator);
                 CHECK(p != nullptr);
                 ptrs.push_back(p);
             }
@@ -124,7 +124,7 @@ TEST_CASE("PoolAllocator - Pool Exhaustion")
             
             for (auto* p : ptrs)
             {
-                Alloc::Delete(&allocator, p);
+                Delete(allocator, p);
             }
             
             CHECK(allocator.GetAvailableBlockCount() == 50);
@@ -138,15 +138,15 @@ TEST_CASE("PoolAllocator - Block Reuse")
     {
         PoolAllocator allocator(sizeof(Data64B), 5, 8);
         
-        auto* p1 = Alloc::New<Data64B>(&allocator);
+        auto* p1 = New<Data64B>(allocator);
         void* addr1 = p1;
         
-        Alloc::Delete(&allocator, p1);
+        Delete(allocator, p1);
         
-        auto* p2 = Alloc::New<Data64B>(&allocator);
+        auto* p2 = New<Data64B>(allocator);
         CHECK(p2 == addr1); // Should reuse same block
         
-        Alloc::Delete(&allocator, p2);
+        Delete(allocator, p2);
     }
     
     SUBCASE("LIFO reuse pattern")
@@ -156,7 +156,7 @@ TEST_CASE("PoolAllocator - Block Reuse")
         std::vector<uint32_t*> ptrs;
         for (int i = 0; i < 5; i++)
         {
-            auto* p = Alloc::New<uint32_t>(&allocator);
+            auto* p = New<uint32_t>(allocator);
             ptrs.push_back(p);
         }
         
@@ -171,14 +171,14 @@ TEST_CASE("PoolAllocator - Block Reuse")
         // This creates free list: 0 -> 1 -> 2 -> 3 -> 4 -> nullptr
         for (int i = 4; i >= 0; i--)
         {
-            Alloc::Delete(&allocator, ptrs[i]);
+            Delete(allocator, ptrs[i]);
         }
         
         // Reallocate - should get blocks in LIFO order: 0,1,2,3,4
         std::vector<uint32_t*> newPtrs;
         for (int i = 0; i < 5; i++)
         {
-            auto* p = Alloc::New<uint32_t>(&allocator);
+            auto* p = New<uint32_t>(allocator);
             CHECK(p == addresses[i]); // LIFO: get addresses[0,1,2,3,4]
             newPtrs.push_back(p);
         }
@@ -186,7 +186,7 @@ TEST_CASE("PoolAllocator - Block Reuse")
         // Cleanup
         for (auto* p : newPtrs)
         {
-            Alloc::Delete(&allocator, p);
+            Delete(allocator, p);
         }
     }
 }
@@ -206,14 +206,14 @@ TEST_CASE("PoolAllocator - Random Access Pattern")
             if (active.size() < 50 || (active.size() < 100 && gen() % 2 == 0))
             {
                 // Allocate
-                auto* p = Alloc::New<Data64B>(&allocator);
+                auto* p = New<Data64B>(allocator);
                 if (p) active.push_back(p);
             }
             else if (!active.empty())
             {
                 // Deallocate random element
                 size_t idx = gen() % active.size();
-                Alloc::Delete(&allocator, active[idx]);
+                Delete(allocator, active[idx]);
                 active.erase(active.begin() + idx);
             }
         }
@@ -221,7 +221,7 @@ TEST_CASE("PoolAllocator - Random Access Pattern")
         // Cleanup
         for (auto* p : active)
         {
-            Alloc::Delete(&allocator, p);
+            Delete(allocator, p);
         }
         
         CHECK(allocator.GetAvailableBlockCount() == 100);
@@ -236,14 +236,14 @@ TEST_CASE("PoolAllocator - Edge Cases")
         
         CHECK(allocator.GetAvailableBlockCount() == 1);
         
-        auto* p1 = Alloc::New<uint32_t>(&allocator);
+        auto* p1 = New<uint32_t>(allocator);
         CHECK(p1 != nullptr);
         CHECK(allocator.GetAvailableBlockCount() == 0);
         
-        auto* p2 = Alloc::New<uint32_t>(&allocator);
+        auto* p2 = New<uint32_t>(allocator);
         CHECK(p2 == nullptr);
         
-        Alloc::Delete(&allocator, p1);
+        Delete(allocator, p1);
         CHECK(allocator.GetAvailableBlockCount() == 1);
     }
     
@@ -256,7 +256,7 @@ TEST_CASE("PoolAllocator - Edge Cases")
         std::vector<uint32_t*> ptrs;
         for (int i = 0; i < 1000; i++)
         {
-            auto* p = Alloc::New<uint32_t>(&allocator);
+            auto* p = New<uint32_t>(allocator);
             CHECK(p != nullptr);
             ptrs.push_back(p);
         }
@@ -265,7 +265,7 @@ TEST_CASE("PoolAllocator - Edge Cases")
         
         for (auto* p : ptrs)
         {
-            Alloc::Delete(&allocator, p);
+            Delete(allocator, p);
         }
     }
     
@@ -273,18 +273,18 @@ TEST_CASE("PoolAllocator - Edge Cases")
     {
         PoolAllocator allocator(sizeof(uint32_t), 10, 8);
         
-        auto* p = Alloc::New<uint32_t>(&allocator);
+        auto* p = New<uint32_t>(allocator);
         CHECK(p != nullptr);
         
         size_t before = allocator.GetAvailableBlockCount();
-        Alloc::Delete(&allocator, p);
+        Delete(allocator, p);
         size_t after = allocator.GetAvailableBlockCount();
         
         CHECK(after == before + 1);
         
         // Second delete - behavior depends on implementation
         // but shouldn't crash
-        Alloc::Delete(&allocator, p);
+        Delete(allocator, p);
     }
     
     SUBCASE("Null pointer delete")
@@ -292,7 +292,7 @@ TEST_CASE("PoolAllocator - Edge Cases")
         PoolAllocator allocator(sizeof(uint32_t), 10, 8);
         
         // Should handle null gracefully
-        Alloc::Delete<uint32_t>(&allocator, nullptr);
+        Delete<uint32_t>(allocator, nullptr);
     }
 }
 
@@ -305,7 +305,7 @@ TEST_CASE("PoolAllocator - Data Integrity")
         std::vector<uint32_t*> ptrs;
         for (uint32_t i = 0; i < 50; i++)
         {
-            auto* p = Alloc::New<uint32_t>(&allocator);
+            auto* p = New<uint32_t>(allocator);
             CHECK(p != nullptr);
             *p = i * 100;
             CHECK(*p == i * 100);
@@ -332,7 +332,7 @@ TEST_CASE("PoolAllocator - Data Integrity")
         // Cleanup
         for (auto* p : ptrs)
         {
-            Alloc::Delete(&allocator, p);
+            Delete(allocator, p);
         }
     }
     
@@ -343,7 +343,7 @@ TEST_CASE("PoolAllocator - Data Integrity")
         std::vector<Data128B*> ptrs;
         for (int i = 0; i < 20; i++)
         {
-            auto* p = Alloc::New<Data128B>(&allocator);
+            auto* p = New<Data128B>(allocator);
             CHECK(p != nullptr);
             
             // Initialize data - Data128B has 128 bytes
@@ -367,7 +367,7 @@ TEST_CASE("PoolAllocator - Data Integrity")
         // Cleanup
         for (auto* p : ptrs)
         {
-            Alloc::Delete(&allocator, p);
+            Delete(allocator, p);
         }
     }
 }
@@ -381,7 +381,7 @@ TEST_CASE("PoolAllocator - Alignment Verification")
         std::vector<uint64_t*> ptrs;
         for (int i = 0; i < 100; i++)
         {
-            auto* p = Alloc::New<uint64_t>(&allocator);
+            auto* p = New<uint64_t>(allocator);
             CHECK(p != nullptr);
             CHECK(reinterpret_cast<size_t>(p) % 8 == 0);
             ptrs.push_back(p);
@@ -389,7 +389,7 @@ TEST_CASE("PoolAllocator - Alignment Verification")
         
         for (auto* p : ptrs)
         {
-            Alloc::Delete(&allocator, p);
+            Delete(allocator, p);
         }
     }
     
@@ -397,16 +397,16 @@ TEST_CASE("PoolAllocator - Alignment Verification")
     {
         {
             PoolAllocator allocator(sizeof(uint32_t), 10, 4);
-            auto* p = Alloc::New<uint32_t>(&allocator);
+            auto* p = New<uint32_t>(allocator);
             CHECK(reinterpret_cast<size_t>(p) % 4 == 0);
-            Alloc::Delete(&allocator, p);
+            Delete(allocator, p);
         }
         
         {
             PoolAllocator allocator(sizeof(Data128B), 10, 16);
-            auto* p = Alloc::New<Data128B>(&allocator);
+            auto* p = New<Data128B>(allocator);
             CHECK(reinterpret_cast<size_t>(p) % 16 == 0);
-            Alloc::Delete(&allocator, p);
+            Delete(allocator, p);
         }
     }
 }
@@ -421,7 +421,7 @@ TEST_CASE("PoolAllocator - Advanced Pool Management")
         
         // Allocate all blocks
         for (int i = 0; i < 20; i++) {
-            auto* p = Alloc::New<Data64B>(&allocator);
+            auto* p = New<Data64B>(allocator);
             CHECK(p != nullptr);
             ptrs.push_back(p);
         }
@@ -430,7 +430,7 @@ TEST_CASE("PoolAllocator - Advanced Pool Management")
         
         // Free every 3rd block
         for (size_t i = 2; i < ptrs.size(); i += 3) {
-            Alloc::Delete(&allocator, ptrs[i]);
+            Delete(allocator, ptrs[i]);
             ptrs[i] = nullptr;
         }
         
@@ -445,7 +445,7 @@ TEST_CASE("PoolAllocator - Advanced Pool Management")
         // Allocate new blocks - should reuse freed ones
         for (size_t i = 2; i < ptrs.size(); i += 3) {
             if (ptrs[i] == nullptr) {
-                ptrs[i] = Alloc::New<Data64B>(&allocator);
+                ptrs[i] = New<Data64B>(allocator);
                 CHECK(ptrs[i] != nullptr);
             }
         }
@@ -454,7 +454,7 @@ TEST_CASE("PoolAllocator - Advanced Pool Management")
         
         // Clean up
         for (auto* p : ptrs) {
-            if (p) Alloc::Delete(&allocator, p);
+            if (p) Delete(allocator, p);
         }
     }
     

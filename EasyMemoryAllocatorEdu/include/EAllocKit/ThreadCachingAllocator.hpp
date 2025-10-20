@@ -177,7 +177,7 @@ namespace EAllocKit
 
     private:
         // Static destructor callback for TLS cleanup
-        static void ThreadCacheDestructor(void* cache);
+        static auto ThreadCacheDestructor(void* cache);
 
     public:
         ThreadCachingAllocator();
@@ -197,12 +197,12 @@ namespace EAllocKit
         size_t GetThreadCacheSize() const;
 
     private: // Util
-        static bool IsPowerOfTwo(size_t value)
+        static auto IsPowerOfTwo(size_t value)
         {
             return value > 0 && (value & (value - 1)) == 0;
         }
 
-        static size_t UpAlignment(size_t size, size_t alignment)
+        static auto UpAlignment(size_t size, size_t alignment)
         {
             return (size + alignment - 1) & ~(alignment - 1);
         }
@@ -215,11 +215,11 @@ namespace EAllocKit
         tls_key_t _tlsKey;
         
         ThreadLocalCache* GetThreadCache();
-        static ObjectSize GetSizeClass(size_t size);
-        static size_t GetClassSize(ObjectSize sizeClass);
-        static size_t GetMaxObjectCount(ObjectSize sizeClass);
+        static auto GetSizeClass(size_t size);
+        static auto GetClassSize(ObjectSize sizeClass);
+        static auto GetMaxObjectCount(ObjectSize sizeClass);
         
-        static AllocationHeader* GetAllocationHeader(void* userPtr);
+        static auto GetAllocationHeader(void* userPtr);
     };
 
     inline ThreadCachingAllocator::CentralFreeList::CentralFreeList(size_t objectSize)
@@ -243,7 +243,7 @@ namespace EAllocKit
         }
     }
 
-    inline void* ThreadCachingAllocator::CentralFreeList::Allocate()
+    inline auto ThreadCachingAllocator::CentralFreeList::Allocate() -> void*
     {
         std::lock_guard<std::mutex> lock(_mutex);
         
@@ -260,7 +260,7 @@ namespace EAllocKit
         return result;
     }
 
-    inline void ThreadCachingAllocator::CentralFreeList::Deallocate(void* ptr)
+    inline auto ThreadCachingAllocator::CentralFreeList::Deallocate(void* ptr) -> void
     {
         if (!ptr) return;
         
@@ -271,7 +271,7 @@ namespace EAllocKit
         _freeList = node;
     }
 
-    inline void ThreadCachingAllocator::CentralFreeList::AllocatePage()
+    inline auto ThreadCachingAllocator::CentralFreeList::AllocatePage() -> void
     {
         size_t spanSize = _objectSize * _objectsPerPage;
         
@@ -333,7 +333,7 @@ namespace EAllocKit
         }
     }
 
-    inline void* ThreadCachingAllocator::ThreadLocalCache::Allocate(ObjectSize sizeClass)
+    inline auto ThreadCachingAllocator::ThreadLocalCache::Allocate(ObjectSize sizeClass) -> void*
     {
         FreeList& freeList = _freeLists[static_cast<size_t>(sizeClass)];
         
@@ -357,7 +357,7 @@ namespace EAllocKit
         return nullptr;
     }
 
-    inline void ThreadCachingAllocator::ThreadLocalCache::Deallocate(void* ptr, ObjectSize sizeClass)
+    inline auto ThreadCachingAllocator::ThreadLocalCache::Deallocate(void* ptr, ObjectSize sizeClass) ->void
     {
         if (!ptr) return;
         
@@ -382,7 +382,7 @@ namespace EAllocKit
         }
     }
 
-    inline void ThreadCachingAllocator::ThreadLocalCache::FetchFromCentral(ObjectSize sizeClass)
+    inline auto ThreadCachingAllocator::ThreadLocalCache::FetchFromCentral(ObjectSize sizeClass) -> void
     {
         auto& pCentralList = _owner->_centralFreeLists[static_cast<size_t>(sizeClass)];
         
@@ -413,7 +413,7 @@ namespace EAllocKit
         }
     }
 
-    inline void ThreadCachingAllocator::ThreadLocalCache::ReturnToCentral(ObjectSize sizeClass)
+    inline auto ThreadCachingAllocator::ThreadLocalCache::ReturnToCentral(ObjectSize sizeClass) -> void
     {
         FreeList& freeList = _freeLists[static_cast<size_t>(sizeClass)];
         if (!freeList.head) 
@@ -437,7 +437,7 @@ namespace EAllocKit
         freeList.count = 0;
     }
 
-    inline void ThreadCachingAllocator::ThreadLocalCache::GarbageCollect()
+    inline auto ThreadCachingAllocator::ThreadLocalCache::GarbageCollect() -> void
     {
         // Return excess objects from largest size classes first (LARGE -> MEDIUM -> SMALL)
         ObjectSize sizeClasses[] = {ObjectSize::LARGE, ObjectSize::MEDIUM, ObjectSize::SMALL};
@@ -491,7 +491,7 @@ namespace EAllocKit
         }
     }
 
-    inline void ThreadCachingAllocator::ThreadCacheDestructor(void* cache)
+    inline auto ThreadCachingAllocator::ThreadCacheDestructor(void* cache)
     {
         delete static_cast<ThreadLocalCache*>(cache);
     }
@@ -533,12 +533,12 @@ namespace EAllocKit
         return cache;
     }
 
-    inline void* ThreadCachingAllocator::Allocate(size_t size)
+    inline auto ThreadCachingAllocator::Allocate(size_t size) -> void*
     {
         return Allocate(size, kDefaultAlignment);
     }
 
-    inline void* ThreadCachingAllocator::Allocate(size_t size, size_t alignment)
+    inline auto ThreadCachingAllocator::Allocate(size_t size, size_t alignment) -> void*
     {
         if (size == 0) 
             return nullptr;
@@ -603,7 +603,7 @@ namespace EAllocKit
         return alignedUserPtr;
     }
 
-    inline void ThreadCachingAllocator::Deallocate(void* ptr)
+    inline auto ThreadCachingAllocator::Deallocate(void* ptr) -> void
     {
         if (!ptr) 
             return;
@@ -617,13 +617,13 @@ namespace EAllocKit
             GetThreadCache()->Deallocate(header, static_cast<ObjectSize>(header->sizeClass));
     }
 
-    inline size_t ThreadCachingAllocator::GetThreadCacheSize() const
+    inline auto ThreadCachingAllocator::GetThreadCacheSize() const -> size_t
     {
         ThreadLocalCache* cache = static_cast<ThreadLocalCache*>(tls_get_value(_tlsKey));
         return cache ? cache->GetCacheSize() : 0;
     }
 
-    inline ThreadCachingAllocator::ObjectSize ThreadCachingAllocator::GetSizeClass(size_t size)
+    inline auto ThreadCachingAllocator::GetSizeClass(size_t size) -> ObjectSize
     {
         if (size <= kSmallThreshold) 
             return ObjectSize::SMALL;
@@ -634,7 +634,7 @@ namespace EAllocKit
         return ObjectSize::DIRECT;
     }
     
-    inline size_t ThreadCachingAllocator::GetClassSize(ObjectSize sizeClass)
+    inline auto ThreadCachingAllocator::GetClassSize(ObjectSize sizeClass) -> size_t
     {
         switch (sizeClass) 
         {
@@ -646,7 +646,7 @@ namespace EAllocKit
         }
     }
     
-    inline size_t ThreadCachingAllocator::GetMaxObjectCount(ObjectSize sizeClass)
+    inline auto ThreadCachingAllocator::GetMaxObjectCount(ObjectSize sizeClass) -> size_t
     {
         switch (sizeClass) 
         {
@@ -657,7 +657,7 @@ namespace EAllocKit
         }
     }
 
-    inline ThreadCachingAllocator::AllocationHeader* ThreadCachingAllocator::GetAllocationHeader(void* userPtr)
+    inline auto ThreadCachingAllocator::GetAllocationHeader(void* userPtr) -> AllocationHeader*
     {
         if (!userPtr) 
             return nullptr;

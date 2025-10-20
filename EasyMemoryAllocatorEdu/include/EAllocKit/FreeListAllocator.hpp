@@ -22,22 +22,22 @@ namespace EAllocKit
             static constexpr size_t HIGHEST_BIT_MASK = static_cast<size_t>(1) << (sizeof(size_t) * 8 - 1);
             
         public:
-            size_t GetSize() const
+            auto GetSize() const -> size_t
             {
                 return _usedAndSize & ~HIGHEST_BIT_MASK;
             }
 
-            void SetSize(size_t size)
+            auto SetSize(size_t size) -> void
             {
                 _usedAndSize = (_usedAndSize & HIGHEST_BIT_MASK) | (size & ~HIGHEST_BIT_MASK);
             }
 
-            bool Used() const
+            auto Used() const -> bool
             {
                 return (_usedAndSize & HIGHEST_BIT_MASK) != 0;
             }
 
-            void SetUsed(bool used)
+            auto SetUsed(bool used) -> void
             {
                 if (used)
                     _usedAndSize |= HIGHEST_BIT_MASK;
@@ -45,17 +45,17 @@ namespace EAllocKit
                     _usedAndSize &= ~HIGHEST_BIT_MASK;
             }
 
-            LinkedNode* GetPrevNode() const
+            auto GetPrevNode() const -> LinkedNode*
             {
                 return _pPrev;
             }
 
-            void SetPrevNode(LinkedNode* prev)
+            auto SetPrevNode(LinkedNode* prev) -> void
             {
                 _pPrev = prev;
             }
 
-            void ClearData()
+            auto ClearData() -> void
             {
                 _pPrev = nullptr;
                 _usedAndSize = 0;
@@ -104,12 +104,12 @@ namespace EAllocKit
         FreeListAllocator(const FreeListAllocator& rhs) = delete;
         FreeListAllocator(FreeListAllocator&& rhs) = delete;
 
-        void* Allocate(size_t size)
+        auto Allocate(size_t size) -> void*
         {
             return Allocate(size, _defaultAlignment);
         }
         
-        void* Allocate(size_t size, size_t alignment)
+        auto Allocate(size_t size, size_t alignment) -> void*
         {
             if (!IsPowerOfTwo(alignment))
                 throw std::invalid_argument("FreeListAllocator only supports power-of-2 alignments");
@@ -166,7 +166,7 @@ namespace EAllocKit
             }
         }
         
-        void Deallocate(void* p)
+        auto Deallocate(void* p) -> void
         {
             if (!p)
                 return;
@@ -217,36 +217,36 @@ namespace EAllocKit
             }
         }
         
-        void* GetMemoryBlockPtr() const
+        auto GetMemoryBlockPtr() const -> void*
         {
             return _pData;
         }
 
-        LinkedNode* GetFirstNode() const
+        auto GetFirstNode() const -> LinkedNode*
         {
             return _pFirstNode;
         }
 
     private:
-        static void StoreDistance(void* userPtr, uint32_t distance)
+        static auto StoreDistance(void* userPtr, uint32_t distance) -> void
         {
             uint32_t* distPtr = static_cast<uint32_t*>(PtrOffsetBytes(userPtr, -4));
             *distPtr = distance;
         }
 
-        static uint32_t ReadDistance(void* userPtr)
+        static auto ReadDistance(void* userPtr) -> uint32_t
         {
             uint32_t* distPtr = static_cast<uint32_t*>(PtrOffsetBytes(userPtr, -4));
             return *distPtr;
         }
 
-        static LinkedNode* GetHeaderFromUserPtr(void* userPtr)
+        static auto GetHeaderFromUserPtr(void* userPtr) -> LinkedNode*
         {
             uint32_t distance = ReadDistance(userPtr);
             return static_cast<LinkedNode*>(PtrOffsetBytes(userPtr, -static_cast<std::ptrdiff_t>(distance)));
         }
 
-        bool IsValidHeader(const LinkedNode* pHeader) const
+        auto IsValidHeader(const LinkedNode* pHeader) const -> bool
         {
             const size_t dataBeginAddr = ToAddr(_pData);
             const size_t dataEndAddr = dataBeginAddr + _size;
@@ -256,24 +256,24 @@ namespace EAllocKit
         }
 
     private: // Util functions
-        static bool IsPowerOfTwo(size_t value)
+        static auto IsPowerOfTwo(size_t value) -> bool
         {
             return value > 0 && (value & (value - 1)) == 0;
         }
 
-        static size_t UpAlignment(size_t size, size_t alignment)
+        static auto UpAlignment(size_t size, size_t alignment) -> size_t
         {
             return (size + alignment - 1) & ~(alignment - 1);
         }
 
         template <typename T>
-        static size_t ToAddr(const T* p)
+        static auto ToAddr(const T* p) -> size_t
         {
             return reinterpret_cast<size_t>(p);
         }
 
         template <typename T>
-        static T* PtrOffsetBytes(T* ptr, std::ptrdiff_t offset)
+        static auto PtrOffsetBytes(T* ptr, std::ptrdiff_t offset) -> T*
         {
             return reinterpret_cast<T*>(static_cast<uint8_t*>(static_cast<void*>(ptr)) + offset);
         }

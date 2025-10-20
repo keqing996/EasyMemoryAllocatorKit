@@ -44,7 +44,7 @@ namespace EAllocKit
         bool IsPointerFromAllocator(void* ptr) const;
 
     private: // Util
-        static bool IsPowerOfTwo(size_t value)
+        static auto IsPowerOfTwo(size_t value)
         {
             return value > 0 && (value & (value - 1)) == 0;
         }
@@ -93,7 +93,7 @@ namespace EAllocKit
         }
     }
     
-    inline void* SlabAllocator::Allocate()
+    inline auto SlabAllocator::Allocate() -> void*
     {
         // If no free objects, allocate new slab
         if (!_freeList)
@@ -111,7 +111,7 @@ namespace EAllocKit
         return obj;
     }
     
-    inline void* SlabAllocator::Allocate(size_t size)
+    inline auto SlabAllocator::Allocate(size_t size) -> void*
     {
         if (size > _adjustedObjectSize)
             return nullptr;
@@ -119,7 +119,7 @@ namespace EAllocKit
         return Allocate();
     }
     
-    inline void* SlabAllocator::Allocate(size_t size, size_t alignment)
+    inline auto SlabAllocator::Allocate(size_t size, size_t alignment) -> void*
     {
         if (size > _adjustedObjectSize || alignment > _defaultAlignment)
             return nullptr;
@@ -127,7 +127,7 @@ namespace EAllocKit
         return Allocate();
     }
     
-    inline void SlabAllocator::Deallocate(void* ptr)
+    inline auto SlabAllocator::Deallocate(void* ptr) -> void
     {
         if (!ptr)
             return;
@@ -145,7 +145,7 @@ namespace EAllocKit
             _allocationCount--;
     }
     
-    inline void SlabAllocator::AllocateNewSlab()
+    inline auto SlabAllocator::AllocateNewSlab() -> void
     {
         // Allocate new slab structure
         Slab* slab = static_cast<Slab*>(::malloc(sizeof(Slab)));
@@ -177,7 +177,7 @@ namespace EAllocKit
         }
     }
     
-    inline bool SlabAllocator::IsPointerFromAllocator(void* ptr) const
+    inline auto SlabAllocator::IsPointerFromAllocator(void* ptr) const -> bool
     {
         uintptr_t ptrAddr = reinterpret_cast<uintptr_t>(ptr);
         

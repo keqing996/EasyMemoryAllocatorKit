@@ -20,7 +20,7 @@ void AllocateAndDelete()
     std::vector<T*> dataVec;
     for (size_t i = 0; i < numberToAllocate; i++)
     {
-        auto ptr = Alloc::New<T>(&allocator);
+        auto ptr = New<T>(allocator);
         if (ptr == nullptr) {
             // Can't allocate more, that's fine for this test
             break;
@@ -31,12 +31,12 @@ void AllocateAndDelete()
 
     // Deallocate
     for (size_t i = 0; i < dataVec.size(); i++)
-        Alloc::Delete(&allocator, dataVec[i]);
+        Delete(allocator, dataVec[i]);
 
     // Simple check - try to allocate again after deallocation
-    auto ptr = Alloc::New<T>(&allocator);
+    auto ptr = New<T>(allocator);
     CHECK(ptr != nullptr); // Should be able to allocate again
-    Alloc::Delete(&allocator, ptr);
+    Delete(allocator, ptr);
 }
 
 TEST_CASE("FreeListAllocator - Basic Allocation")
@@ -55,44 +55,44 @@ TEST_CASE("FreeListAllocator - Fragmentation and Coalescing")
         FreeListAllocator allocator(4096, 8);
         
         // Allocate
-        auto* p1 = Alloc::New<Data64B>(&allocator);
-        auto* p2 = Alloc::New<Data64B>(&allocator);
-        auto* p3 = Alloc::New<Data64B>(&allocator);
+        auto* p1 = New<Data64B>(allocator);
+        auto* p2 = New<Data64B>(allocator);
+        auto* p3 = New<Data64B>(allocator);
         
         CHECK(p1 != nullptr);
         CHECK(p2 != nullptr);
         CHECK(p3 != nullptr);
         
         // Free middle block
-        Alloc::Delete(&allocator, p2);
+        Delete(allocator, p2);
         
         // Reallocate - should reuse freed block
-        auto* p4 = Alloc::New<Data64B>(&allocator);
+        auto* p4 = New<Data64B>(allocator);
         CHECK(p4 == p2); // Should reuse same memory
         
-        Alloc::Delete(&allocator, p1);
-        Alloc::Delete(&allocator, p4);
-        Alloc::Delete(&allocator, p3);
+        Delete(allocator, p1);
+        Delete(allocator, p4);
+        Delete(allocator, p3);
     }
     
     SUBCASE("Coalesce adjacent free blocks")
     {
         FreeListAllocator allocator(4096, 8);
         
-        auto* p1 = Alloc::New<Data64B>(&allocator);
-        auto* p2 = Alloc::New<Data64B>(&allocator);
-        auto* p3 = Alloc::New<Data64B>(&allocator);
+        auto* p1 = New<Data64B>(allocator);
+        auto* p2 = New<Data64B>(allocator);
+        auto* p3 = New<Data64B>(allocator);
         
         // Free all in order - should coalesce
-        Alloc::Delete(&allocator, p1);
-        Alloc::Delete(&allocator, p2);
-        Alloc::Delete(&allocator, p3);
+        Delete(allocator, p1);
+        Delete(allocator, p2);
+        Delete(allocator, p3);
         
         // Should be able to allocate larger block
-        auto* large = Alloc::New<Data128B>(&allocator);
+        auto* large = New<Data128B>(allocator);
         CHECK(large != nullptr);
         
-        Alloc::Delete(&allocator, large);
+        Delete(allocator, large);
     }
     
     SUBCASE("Fragmentation pattern")
@@ -102,28 +102,28 @@ TEST_CASE("FreeListAllocator - Fragmentation and Coalescing")
         std::vector<Data64B*> ptrs;
         for (int i = 0; i < 50; i++)
         {
-            auto* p = Alloc::New<Data64B>(&allocator);
+            auto* p = New<Data64B>(allocator);
             if (p) ptrs.push_back(p);
         }
         
         // Free every other block - create fragmentation
         for (size_t i = 0; i < ptrs.size(); i += 2)
         {
-            Alloc::Delete(&allocator, ptrs[i]);
+            Delete(allocator, ptrs[i]);
             ptrs[i] = nullptr;
         }
         
         // Try to allocate in freed spaces
         for (size_t i = 0; i < ptrs.size(); i += 2)
         {
-            auto* p = Alloc::New<Data64B>(&allocator);
+            auto* p = New<Data64B>(allocator);
             if (p) ptrs[i] = p;
         }
         
         // Cleanup
         for (auto* p : ptrs)
         {
-            if (p) Alloc::Delete(&allocator, p);
+            if (p) Delete(allocator, p);
         }
     }
 }
@@ -134,26 +134,26 @@ TEST_CASE("FreeListAllocator - Variable Size Allocations")
     {
         FreeListAllocator allocator(8192, 8);
         
-        auto* small1 = Alloc::New<uint32_t>(&allocator);
-        auto* large1 = Alloc::New<Data128B>(&allocator);
-        auto* medium1 = Alloc::New<Data64B>(&allocator);
-        auto* small2 = Alloc::New<uint64_t>(&allocator);
+        auto* small1 = New<uint32_t>(allocator);
+        auto* large1 = New<Data128B>(allocator);
+        auto* medium1 = New<Data64B>(allocator);
+        auto* small2 = New<uint64_t>(allocator);
         
         CHECK(small1 != nullptr);
         CHECK(large1 != nullptr);
         CHECK(medium1 != nullptr);
         CHECK(small2 != nullptr);
         
-        Alloc::Delete(&allocator, large1);
-        Alloc::Delete(&allocator, small1);
+        Delete(allocator, large1);
+        Delete(allocator, small1);
         
         // Allocate in freed space
-        auto* medium2 = Alloc::New<Data64B>(&allocator);
+        auto* medium2 = New<Data64B>(allocator);
         CHECK(medium2 != nullptr);
         
-        Alloc::Delete(&allocator, medium1);
-        Alloc::Delete(&allocator, medium2);
-        Alloc::Delete(&allocator, small2);
+        Delete(allocator, medium1);
+        Delete(allocator, medium2);
+        Delete(allocator, small2);
     }
     
     SUBCASE("Allocate larger than available")
@@ -161,14 +161,14 @@ TEST_CASE("FreeListAllocator - Variable Size Allocations")
         FreeListAllocator allocator(256, 8);
         
         // Try to allocate more than available
-        auto* p = Alloc::New<Data128B>(&allocator);
+        auto* p = New<Data128B>(allocator);
         CHECK(p != nullptr);
         
         // This should fail
-        auto* p2 = Alloc::New<Data128B>(&allocator);
+        auto* p2 = New<Data128B>(allocator);
         CHECK(p2 == nullptr);
         
-        Alloc::Delete(&allocator, p);
+        Delete(allocator, p);
     }
 }
 
@@ -214,28 +214,28 @@ TEST_CASE("FreeListAllocator - Edge Cases")
     {
         FreeListAllocator allocator(1024, 8);
         
-        auto* p = Alloc::New<uint32_t>(&allocator);
+        auto* p = New<uint32_t>(allocator);
         CHECK(p != nullptr);
         
-        Alloc::Delete(&allocator, p);
+        Delete(allocator, p);
         
         // Second free should be safe (though not recommended)
         // The implementation should handle this gracefully
-        Alloc::Delete(&allocator, p);
+        Delete(allocator, p);
     }
     
     SUBCASE("Very small allocator")
     {
         FreeListAllocator allocator(64, 4);
         
-        auto* p1 = Alloc::New<uint32_t>(&allocator);
+        auto* p1 = New<uint32_t>(allocator);
         CHECK(p1 != nullptr);
         
-        auto* p2 = Alloc::New<uint32_t>(&allocator);
+        auto* p2 = New<uint32_t>(allocator);
         CHECK(p2 != nullptr);
         
-        Alloc::Delete(&allocator, p1);
-        Alloc::Delete(&allocator, p2);
+        Delete(allocator, p1);
+        Delete(allocator, p2);
     }
     
     SUBCASE("Allocate entire pool")
@@ -245,7 +245,7 @@ TEST_CASE("FreeListAllocator - Edge Cases")
         std::vector<uint32_t*> ptrs;
         while (true)
         {
-            auto* p = Alloc::New<uint32_t>(&allocator);
+            auto* p = New<uint32_t>(allocator);
             if (!p) break;
             ptrs.push_back(p);
         }
@@ -255,13 +255,13 @@ TEST_CASE("FreeListAllocator - Edge Cases")
         // Free all
         for (auto* p : ptrs)
         {
-            Alloc::Delete(&allocator, p);
+            Delete(allocator, p);
         }
         
         // Should be able to allocate again
-        auto* p = Alloc::New<uint32_t>(&allocator);
+        auto* p = New<uint32_t>(allocator);
         CHECK(p != nullptr);
-        Alloc::Delete(&allocator, p);
+        Delete(allocator, p);
     }
     
     SUBCASE("Random allocation/deallocation pattern")
@@ -275,13 +275,13 @@ TEST_CASE("FreeListAllocator - Edge Cases")
             {
                 // Deallocate random element
                 size_t idx = i % active.size();
-                Alloc::Delete(&allocator, active[idx]);
+                Delete(allocator, active[idx]);
                 active.erase(active.begin() + idx);
             }
             else
             {
                 // Allocate
-                auto* p = Alloc::New<Data64B>(&allocator);
+                auto* p = New<Data64B>(allocator);
                 if (p) active.push_back(p);
             }
         }
@@ -289,7 +289,7 @@ TEST_CASE("FreeListAllocator - Edge Cases")
         // Cleanup
         for (auto* p : active)
         {
-            Alloc::Delete(&allocator, p);
+            Delete(allocator, p);
         }
     }
 }

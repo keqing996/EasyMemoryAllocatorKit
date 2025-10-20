@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -25,30 +26,30 @@ namespace EAllocKit
         RingBufferAllocator(RingBufferAllocator&& rhs) = delete;
         
     public:
-        void* Allocate(size_t size);
-        void* Allocate(size_t size, size_t alignment);
-        void DeallocateNext();        // Deallocate the next object in FIFO order
-        void Consume(size_t size);    // Explicitly consume bytes
-        void Reset();                 // Reset both pointers
+        auto Allocate(size_t size) -> void*;
+        auto Allocate(size_t size, size_t alignment) -> void*;
+        auto DeallocateNext() -> void;        // Deallocate the next object in FIFO order
+        auto Consume(size_t size) -> void;    // Explicitly consume bytes
+        auto Reset() -> void;                 // Reset both pointers
         
-        size_t GetCapacity() const { return _size; }
-        size_t GetUsedSpace() const;
-        size_t GetAvailableSpace() const;
-        void* GetMemoryBlockPtr() const { return _pData; }
+        auto GetCapacity() const -> size_t { return _size; }
+        auto GetUsedSpace() const -> size_t;
+        auto GetAvailableSpace() const -> size_t;
+        auto GetMemoryBlockPtr() const -> void* { return _pData; }
         
     private: // Util functions
-        static bool IsPowerOfTwo(size_t value)
+        static auto IsPowerOfTwo(size_t value) -> bool
         {
             return value > 0 && (value & (value - 1)) == 0;
         }
 
-        static size_t UpAlignment(size_t size, size_t alignment)
+        static auto UpAlignment(size_t size, size_t alignment) -> size_t
         {
             return (size + alignment - 1) & ~(alignment - 1);
         }
 
         template <typename T>
-        static size_t ToAddr(const T* p)
+        static auto ToAddr(const T* p)
         {
             return reinterpret_cast<size_t>(p);
         }
@@ -90,12 +91,12 @@ namespace EAllocKit
             ::free(_pData);
     }
     
-    inline void* RingBufferAllocator::Allocate(size_t size)
+    inline auto RingBufferAllocator::Allocate(size_t size) -> void*
     {
         return Allocate(size, _defaultAlignment);
     }
     
-    inline void* RingBufferAllocator::Allocate(size_t size, size_t alignment)
+    inline auto RingBufferAllocator::Allocate(size_t size, size_t alignment) -> void*
     {
         if (size == 0)
             return nullptr;
@@ -160,7 +161,7 @@ namespace EAllocKit
         return userPtr;
     }
     
-    inline void RingBufferAllocator::DeallocateNext()
+    inline auto RingBufferAllocator::DeallocateNext() -> void
     {
         // Check if there's anything to deallocate
         if (_readPtr == _writePtr && !_isFull)
@@ -174,7 +175,7 @@ namespace EAllocKit
         Consume(header->size);
     }
     
-    inline void RingBufferAllocator::Consume(size_t size)
+    inline auto RingBufferAllocator::Consume(size_t size) -> void
     {
         if (size == 0)
             return;
@@ -186,14 +187,14 @@ namespace EAllocKit
         _isFull = false;
     }
     
-    inline void RingBufferAllocator::Reset()
+    inline auto RingBufferAllocator::Reset() -> void
     {
         _writePtr = 0;
         _readPtr = 0;
         _isFull = false;
     }
     
-    inline size_t RingBufferAllocator::GetUsedSpace() const
+    inline auto RingBufferAllocator::GetUsedSpace() const -> size_t
     {
         if (_isFull)
             return _size;
@@ -204,12 +205,12 @@ namespace EAllocKit
             return _size - _readPtr + _writePtr;
     }
     
-    inline size_t RingBufferAllocator::GetAvailableSpace() const
+    inline auto RingBufferAllocator::GetAvailableSpace() const -> size_t
     {
         return _size - GetUsedSpace();
     }
     
-    inline size_t RingBufferAllocator::GetAvailableContiguous() const
+    inline auto RingBufferAllocator::GetAvailableContiguous() const -> size_t
     {
         if (_isFull)
             return 0;

@@ -63,7 +63,7 @@ namespace EAllocKit
         auto Deallocate(void* p) -> void;
 
         // Reset allocator
-        void Reset();
+        auto Reset() -> void;
         
         // Checkpoint/Restore interface
         auto SaveCheckpoint() const -> Checkpoint;
@@ -74,21 +74,21 @@ namespace EAllocKit
         auto GetCapacity() const -> size_t;
         auto GetUsedBytes() const -> size_t;
         auto GetRemainingBytes() const -> size_t;
-        bool ContainsPointer(const void* ptr) const;
-        void* GetMemoryBlockPtr() const;
-        void* GetCurrentPtr() const;
+        auto ContainsPointer(const void* ptr) const -> bool;
+        auto GetMemoryBlockPtr() const -> void*;
+        auto GetCurrentPtr() const -> void*;
         
         // Statistics
-        bool IsEmpty() const;
-        bool IsFull() const;
+        auto IsEmpty() const -> bool;
+        auto IsFull() const -> bool;
 
     private: // Util
-        static bool IsPowerOfTwo(size_t value)
+        static auto IsPowerOfTwo(size_t value) -> bool
         {
             return value > 0 && (value & (value - 1)) == 0;
         }
 
-        static size_t UpAlignment(size_t size, size_t alignment)
+        static auto UpAlignment(size_t size, size_t alignment) -> size_t
         {
             return (size + alignment - 1) & ~(alignment - 1);
         }
@@ -125,12 +125,12 @@ namespace EAllocKit
         _pMemory = nullptr;
     }
     
-    inline void* ArenaAllocator::Allocate(size_t size)
+    inline auto ArenaAllocator::Allocate(size_t size) -> void*
     {
         return Allocate(size, _defaultAlignment);
     }
     
-    inline void* ArenaAllocator::Allocate(size_t size, size_t alignment)
+    inline auto ArenaAllocator::Allocate(size_t size, size_t alignment) -> void*
     {
         if (size == 0)
             return nullptr;
@@ -156,22 +156,22 @@ namespace EAllocKit
         return result;
     }
     
-    inline void ArenaAllocator::Deallocate(void* p)
+    inline auto ArenaAllocator::Deallocate(void* p) -> void
     {
         // do nothing
     }
     
-    inline void ArenaAllocator::Reset()
+    inline auto ArenaAllocator::Reset() -> void
     {
         _pCurrent = _pMemory;
     }
     
-    inline ArenaAllocator::Checkpoint ArenaAllocator::SaveCheckpoint() const
+    inline auto ArenaAllocator::SaveCheckpoint() const -> Checkpoint
     {
         return Checkpoint(_pCurrent, GetRemainingBytes());
     }
     
-    inline void ArenaAllocator::RestoreCheckpoint(const Checkpoint& checkpoint)
+    inline auto ArenaAllocator::RestoreCheckpoint(const Checkpoint& checkpoint) -> void
     {
         if (!checkpoint.IsValid())
             return;
@@ -186,27 +186,27 @@ namespace EAllocKit
         _pCurrent = static_cast<uint8_t*>(checkpoint.pSaved);
     }
     
-    inline ArenaAllocator::ScopeGuard ArenaAllocator::CreateScope()
+    inline auto ArenaAllocator::CreateScope() -> ScopeGuard
     {
         return ScopeGuard(*this);
     }
     
-    inline size_t ArenaAllocator::GetCapacity() const
+    inline auto ArenaAllocator::GetCapacity() const -> size_t
     {
         return _capacity;
     }
     
-    inline size_t ArenaAllocator::GetUsedBytes() const
+    inline auto ArenaAllocator::GetUsedBytes() const -> size_t
     {
         return _pCurrent - _pMemory;
     }
     
-    inline size_t ArenaAllocator::GetRemainingBytes() const
+    inline auto ArenaAllocator::GetRemainingBytes() const -> size_t
     {
         return _capacity - GetUsedBytes();
     }
     
-    inline bool ArenaAllocator::ContainsPointer(const void* ptr) const
+    inline auto ArenaAllocator::ContainsPointer(const void* ptr) const -> bool
     {
         if (!ptr) 
             return false;
@@ -217,22 +217,22 @@ namespace EAllocKit
         return ptr >= base && ptr < end;
     }
     
-    inline void* ArenaAllocator::GetMemoryBlockPtr() const
+    inline auto ArenaAllocator::GetMemoryBlockPtr() const -> void*
     {
         return _pMemory;
     }
     
-    inline void* ArenaAllocator::GetCurrentPtr() const
+    inline auto ArenaAllocator::GetCurrentPtr() const -> void*
     {
         return _pCurrent;
     }
     
-    inline bool ArenaAllocator::IsEmpty() const
+    inline auto ArenaAllocator::IsEmpty() const -> bool
     {
         return _pCurrent == _pMemory;
     }
     
-    inline bool ArenaAllocator::IsFull() const
+    inline auto ArenaAllocator::IsFull() const -> bool
     {
         return GetRemainingBytes() < _defaultAlignment;
     }

@@ -22,7 +22,7 @@ void AllocateAndDelete()
     std::vector<T*> dataVec;
     for (size_t i = 0; i < numberToAllocate; i++)
     {
-        auto ptr = Alloc::New<T>(&allocator);
+        auto ptr = New<T>(allocator);
         if (ptr == nullptr) {
             // Can't allocate more, that's fine for this test
             break;
@@ -33,12 +33,12 @@ void AllocateAndDelete()
 
     // Deallocate
     for (size_t i = 0; i < dataVec.size(); i++)
-        Alloc::Delete(&allocator, dataVec[i]);
+        Delete(allocator, dataVec[i]);
 
     // Simple check - try to allocate again after deallocation
-    auto ptr = Alloc::New<T>(&allocator);
+    auto ptr = New<T>(allocator);
     CHECK(ptr != nullptr); // Should be able to allocate again
-    Alloc::Delete(&allocator, ptr);
+    Delete(allocator, ptr);
 }
 
 TEST_CASE("TLSFAllocator - Basic Allocation")

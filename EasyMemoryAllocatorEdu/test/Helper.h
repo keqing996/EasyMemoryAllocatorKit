@@ -31,6 +31,7 @@ T* New(Allocator& pAllocator)
         return nullptr;
     return new (AllocatorMarker(), pMem) T();
 }
+
 template<typename T, typename... Args, typename Allocator>
 T* New(Allocator& pAllocator, Args&&... args)
 {
@@ -39,6 +40,7 @@ T* New(Allocator& pAllocator, Args&&... args)
         return nullptr;
     return new (AllocatorMarker(), pMem) T(std::forward<Args>(args)...);
 }
+
 template<typename T, typename Allocator>
 void Delete(Allocator& pAllocator, T* p)
 {
