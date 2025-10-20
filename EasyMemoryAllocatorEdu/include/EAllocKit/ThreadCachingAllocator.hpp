@@ -177,7 +177,7 @@ namespace EAllocKit
 
     private:
         // Static destructor callback for TLS cleanup
-        static auto ThreadCacheDestructor(void* cache);
+        static auto ThreadCacheDestructor(void* cache) -> void;
 
     public:
         ThreadCachingAllocator();
@@ -215,11 +215,11 @@ namespace EAllocKit
         tls_key_t _tlsKey;
         
         ThreadLocalCache* GetThreadCache();
-        static auto GetSizeClass(size_t size);
-        static auto GetClassSize(ObjectSize sizeClass);
-        static auto GetMaxObjectCount(ObjectSize sizeClass);
+        static auto GetSizeClass(size_t size) -> ObjectSize;
+        static auto GetClassSize(ObjectSize sizeClass) -> size_t;
+        static auto GetMaxObjectCount(ObjectSize sizeClass) -> size_t;
         
-        static auto GetAllocationHeader(void* userPtr);
+        static auto GetAllocationHeader(void* userPtr) -> AllocationHeader*;
     };
 
     inline ThreadCachingAllocator::CentralFreeList::CentralFreeList(size_t objectSize)
@@ -491,7 +491,7 @@ namespace EAllocKit
         }
     }
 
-    inline auto ThreadCachingAllocator::ThreadCacheDestructor(void* cache)
+    inline auto ThreadCachingAllocator::ThreadCacheDestructor(void* cache) -> void
     {
         delete static_cast<ThreadLocalCache*>(cache);
     }

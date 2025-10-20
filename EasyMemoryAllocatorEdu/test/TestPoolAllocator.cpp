@@ -8,27 +8,33 @@
 
 using namespace EAllocKit;
 
-namespace Alloc
+// PoolAllocator specialization for New function
+template<typename T>
+T* New(PoolAllocator& allocator)
 {
-    template<typename T>
-    T* New(PoolAllocator* pAllocator)
-    {
-        void* pMem = pAllocator->Allocate();
-        if (pMem == nullptr)
-            return nullptr;
+    void* pMem = allocator.Allocate();
+    if (pMem == nullptr)
+        return nullptr;
+    return new (AllocatorMarker(), pMem) T();
+}
 
-        return new (AllocatorMarker(), pMem) T();
-    }
+template<typename T, typename... Args>
+T* New(PoolAllocator& allocator, Args&&... args)
+{
+    void* pMem = allocator.Allocate();
+    if (pMem == nullptr)
+        return nullptr;
+    return new (AllocatorMarker(), pMem) T(std::forward<Args>(args)...);
+}
 
-    template<typename T, typename... Args>
-    T* New(PoolAllocator* pAllocator, Args&&... args)
-    {
-        void* pMem = pAllocator->Allocate();
-        if (pMem == nullptr)
-            return nullptr;
-
-        return new (AllocatorMarker(), pMem) T(std::forward<Args>(args)...);
-    }
+// PoolAllocator specialization for Delete function
+template<typename T>
+void Delete(PoolAllocator& allocator, T* p)
+{
+    if (!p)
+        return;
+    p->~T();
+    allocator.Deallocate(p);
 }
 
 template<typename T, size_t alignment, size_t num>
@@ -292,7 +298,7 @@ TEST_CASE("PoolAllocator - Edge Cases")
         PoolAllocator allocator(sizeof(uint32_t), 10, 8);
         
         // Should handle null gracefully
-        Delete<uint32_t>(allocator, nullptr);
+        Delete(allocator, static_cast<uint32_t*>(nullptr));
     }
 }
 
