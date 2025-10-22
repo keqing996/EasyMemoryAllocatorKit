@@ -1,6 +1,8 @@
 #include <cstdio>
 #include <cstring>
+#include <vector>
 #include "EAllocKit/LinearAllocator.hpp"
+#include "EAllocKit/STLAllocatorAdapter.hpp"
 
 void DemonstrateBasicUsage()
 {
@@ -167,6 +169,119 @@ void DemonstratePracticalUsage()
     }
 }
 
+void DemonstrateSTLContainers()
+{
+    printf("\n=== Linear Allocator with STL Containers Demo ===\n");
+    
+    // Create a linear allocator with enough space for our demo
+    EAllocKit::LinearAllocator allocator(2048);
+    
+    printf("Created LinearAllocator with 2048 bytes\n");
+    printf("Initial available space: %zu bytes\n", allocator.GetAvailableSpaceSize());
+    
+    // Define STL allocator adapter type for int
+    using IntVectorAllocator = EAllocKit::STLAllocatorAdapter<int, EAllocKit::LinearAllocator>;
+    using CustomIntVector = std::vector<int, IntVectorAllocator>;
+    
+    // Create vector with custom allocator
+    {
+        printf("\n--- Creating std::vector with LinearAllocator ---\n");
+        
+        CustomIntVector vec{IntVectorAllocator(&allocator)};
+        
+        printf("Empty vector created\n");
+        printf("Available space: %zu bytes\n", allocator.GetAvailableSpaceSize());
+        
+        // Add elements to vector
+        printf("Adding elements to vector...\n");
+        for (int i = 0; i < 10; ++i) {
+            vec.push_back(i * i);
+        }
+        
+        printf("Vector size: %zu elements\n", vec.size());
+        printf("Available space after adding 10 elements: %zu bytes\n", allocator.GetAvailableSpaceSize());
+        
+        // Display vector contents
+        printf("Vector contents: ");
+        for (size_t i = 0; i < vec.size(); ++i) {
+            printf("%d ", vec[i]);
+        }
+        printf("\n");
+        
+        // Reserve more space
+        printf("\nReserving space for 50 elements...\n");
+        vec.reserve(50);
+        printf("Vector capacity: %zu elements\n", vec.capacity());
+        printf("Available space after reserve: %zu bytes\n", allocator.GetAvailableSpaceSize());
+        
+        // Add more elements
+        printf("Adding 15 more elements...\n");
+        for (int i = 10; i < 25; ++i) {
+            vec.push_back(i * 2);
+        }
+        
+        printf("Vector size: %zu elements\n", vec.size());
+        printf("Available space: %zu bytes\n", allocator.GetAvailableSpaceSize());
+        
+        // Show some elements
+        printf("First 5 elements: ");
+        for (int i = 0; i < 5; ++i) {
+            printf("%d ", vec[i]);
+        }
+        printf("\nLast 5 elements: ");
+        for (size_t i = vec.size() - 5; i < vec.size(); ++i) {
+            printf("%d ", vec[i]);
+        }
+        printf("\n");
+    }
+    
+    printf("\n--- Vector destroyed (but memory not freed in LinearAllocator) ---\n");
+    printf("Available space after vector destruction: %zu bytes\n", allocator.GetAvailableSpaceSize());
+    printf("Note: LinearAllocator doesn't free memory on deallocate()\n");
+    
+    // Create another vector to show memory reuse limitation
+    {
+        printf("\n--- Creating second vector ---\n");
+        CustomIntVector vec2{IntVectorAllocator(&allocator)};
+        
+        // This will use more memory from the linear allocator
+        vec2.reserve(20);
+        for (int i = 0; i < 15; ++i) {
+            vec2.push_back(i * 3);
+        }
+        
+        printf("Second vector size: %zu elements\n", vec2.size());
+        printf("Available space: %zu bytes\n", allocator.GetAvailableSpaceSize());
+    }
+    
+    printf("\n--- Resetting allocator ---\n");
+    allocator.Reset();
+    printf("Available space after reset: %zu bytes\n", allocator.GetAvailableSpaceSize());
+    
+    // Show different types can be used with the same allocator
+    {
+        printf("\n--- Using LinearAllocator with vector<double> ---\n");
+        
+        using DoubleVectorAllocator = EAllocKit::STLAllocatorAdapter<double, EAllocKit::LinearAllocator>;
+        using CustomDoubleVector = std::vector<double, DoubleVectorAllocator>;
+        
+        CustomDoubleVector doubleVec{DoubleVectorAllocator(&allocator)};
+        
+        for (int i = 0; i < 8; ++i) {
+            doubleVec.push_back(i * 3.14159);
+        }
+        
+        printf("Double vector size: %zu elements\n", doubleVec.size());
+        printf("Available space: %zu bytes\n", allocator.GetAvailableSpaceSize());
+        
+        printf("Double vector contents: ");
+        for (const auto& val : doubleVec) {
+            printf("%.2f ", val);
+        }
+        printf("\n");
+    }
+}
+
 void DemonstrateErrorHandling()
 {
     printf("\n=== Linear Allocator Error Handling Demo ===\n");
@@ -200,19 +315,8 @@ int main()
     DemonstrateReset();
     DemonstrateOutOfMemory();
     DemonstratePracticalUsage();
+    DemonstrateSTLContainers();
     DemonstrateErrorHandling();
-    
-    printf("\n=== Summary ===\n");
-    printf("LinearAllocator is perfect for:\n");
-    printf("- Frame-based allocation patterns\n");
-    printf("- Temporary allocations that are reset together\n");
-    printf("- Fast sequential memory allocation\n");
-    printf("- Memory pools with predictable usage patterns\n");
-    printf("\nKey characteristics:\n");
-    printf("- Very fast allocation (O(1))\n");
-    printf("- No individual deallocation\n");
-    printf("- Supports custom alignment\n");
-    printf("- Reset clears all allocations at once\n");
     
     return 0;
 }
