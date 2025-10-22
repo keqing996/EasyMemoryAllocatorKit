@@ -20,5 +20,13 @@ if (ENABLE_EALLOCKIT_TEST)
     create_eallockit_test (thread_caching_allocator ${CMAKE_CURRENT_SOURCE_DIR}/test/TestThreadCachingAllocator.cpp)
     create_eallockit_test (frame_allocator       ${CMAKE_CURRENT_SOURCE_DIR}/test/TestFrameAllocator.cpp)
     create_eallockit_test (arena_allocator              ${CMAKE_CURRENT_SOURCE_DIR}/test/TestArenaAllocator.cpp)
-
 endif ()
+
+function(create_eallockit_example example_name source_file)
+    add_executable          (eallockit_edu_example_${example_name} ${source_file})
+    target_link_libraries   (eallockit_edu_example_${example_name} PUBLIC eallockit)
+endfunction()
+
+if (ENABLE_EALLOCKIT_EXAMPLE)
+    create_eallockit_example (linear_allocator      ${CMAKE_CURRENT_SOURCE_DIR}/example/ExampleLinearAllocator.cpp)
+endif()
