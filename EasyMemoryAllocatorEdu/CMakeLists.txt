@@ -29,4 +29,6 @@ endfunction()
 
 if (ENABLE_EALLOCKIT_EXAMPLE)
     create_eallockit_example (linear_allocator      ${CMAKE_CURRENT_SOURCE_DIR}/example/ExampleLinearAllocator.cpp)
+    create_eallockit_example (free_list_allocator   ${CMAKE_CURRENT_SOURCE_DIR}/example/ExampleFreeListAllocator.cpp)
+    create_eallockit_example (frame_allocator       ${CMAKE_CURRENT_SOURCE_DIR}/example/ExampleFrameAllocator.cpp)
 endif()
