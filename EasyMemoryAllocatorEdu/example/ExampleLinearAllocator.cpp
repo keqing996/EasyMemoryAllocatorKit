@@ -1,322 +1,175 @@
 #include <cstdio>
 #include <cstring>
 #include <vector>
+#include <chrono>
+#include <thread>
+#include <cmath>
 #include "EAllocKit/LinearAllocator.hpp"
 #include "EAllocKit/STLAllocatorAdapter.hpp"
 
-void DemonstrateBasicUsage()
-{
-    printf("=== Linear Allocator Basic Usage Demo ===\n");
-    
-    // Create a linear allocator with 1KB memory pool
-    EAllocKit::LinearAllocator allocator(1024);
-    
-    printf("Initial available space: %zu bytes\n", allocator.GetAvailableSpaceSize());
-    printf("Memory block starts at: %p\n", allocator.GetMemoryBlockPtr());
-    printf("Current pointer at: %p\n", allocator.GetCurrentPtr());
-    
-    // Allocate some memory blocks
-    void* ptr1 = allocator.Allocate(100);
-    printf("\nAllocated 100 bytes at: %p\n", ptr1);
-    printf("Available space after allocation: %zu bytes\n", allocator.GetAvailableSpaceSize());
-    printf("Current pointer now at: %p\n", allocator.GetCurrentPtr());
-    
-    void* ptr2 = allocator.Allocate(200);
-    printf("\nAllocated 200 bytes at: %p\n", ptr2);
-    printf("Available space after allocation: %zu bytes\n", allocator.GetAvailableSpaceSize());
-    
-    void* ptr3 = allocator.Allocate(50);
-    printf("\nAllocated 50 bytes at: %p\n", ptr3);
-    printf("Available space after allocation: %zu bytes\n", allocator.GetAvailableSpaceSize());
-    
-    // Demonstrate that deallocate does nothing (as expected for linear allocator)
-    allocator.Deallocate(ptr1);
-    printf("\nAfter 'deallocating' ptr1, available space: %zu bytes\n", allocator.GetAvailableSpaceSize());
-    printf("Note: Linear allocator doesn't actually free individual blocks\n");
-}
-
-void DemonstrateAlignment()
-{
-    printf("\n=== Linear Allocator Alignment Demo ===\n");
-    
-    // Create allocator with default 4-byte alignment
-    EAllocKit::LinearAllocator allocator(1024, 8);
-    
-    printf("Allocator created with 8-byte default alignment\n");
-    printf("Initial current pointer: %p\n", allocator.GetCurrentPtr());
-    
-    // Allocate with default alignment
-    void* ptr1 = allocator.Allocate(1);
-    printf("\nAllocated 1 byte with default alignment at: %p\n", ptr1);
-    printf("Address alignment: %zu (should be 0)\n", reinterpret_cast<uintptr_t>(ptr1) % 8);
-    
-    // Allocate with custom alignment
-    void* ptr2 = allocator.Allocate(1, 16);
-    printf("\nAllocated 1 byte with 16-byte alignment at: %p\n", ptr2);
-    printf("Address alignment: %zu (should be 0)\n", reinterpret_cast<uintptr_t>(ptr2) % 16);
-    
-    void* ptr3 = allocator.Allocate(1, 32);
-    printf("\nAllocated 1 byte with 32-byte alignment at: %p\n", ptr3);
-    printf("Address alignment: %zu (should be 0)\n", reinterpret_cast<uintptr_t>(ptr3) % 32);
-}
-
-void DemonstrateReset()
-{
-    printf("\n=== Linear Allocator Reset Demo ===\n");
-    
-    EAllocKit::LinearAllocator allocator(1024);
-    
-    printf("Initial state:\n");
-    printf("  Available space: %zu bytes\n", allocator.GetAvailableSpaceSize());
-    printf("  Current pointer: %p\n", allocator.GetCurrentPtr());
-    
-    // Allocate several blocks
-    allocator.Allocate(100);
-    allocator.Allocate(200);
-    allocator.Allocate(150);
-    
-    printf("\nAfter allocating 450 bytes:\n");
-    printf("  Available space: %zu bytes\n", allocator.GetAvailableSpaceSize());
-    printf("  Current pointer: %p\n", allocator.GetCurrentPtr());
-    
-    // Reset the allocator
-    allocator.Reset();
-    
-    printf("\nAfter reset:\n");
-    printf("  Available space: %zu bytes\n", allocator.GetAvailableSpaceSize());
-    printf("  Current pointer: %p\n", allocator.GetCurrentPtr());
-    printf("  Back to initial state: %s\n", (allocator.GetCurrentPtr() == allocator.GetMemoryBlockPtr() ? "Yes" : "No"));
-}
-
-void DemonstrateOutOfMemory()
-{
-    printf("\n=== Linear Allocator Out of Memory Demo ===\n");
-    
-    // Create small allocator to demonstrate exhaustion
-    EAllocKit::LinearAllocator allocator(100);
-    
-    printf("Created allocator with 100 bytes capacity\n");
-    
-    void* ptr1 = allocator.Allocate(50);
-    printf("Allocated 50 bytes: %s\n", (ptr1 ? "Success" : "Failed"));
-    printf("Remaining space: %zu bytes\n", allocator.GetAvailableSpaceSize());
-    
-    void* ptr2 = allocator.Allocate(40);
-    printf("Allocated 40 bytes: %s\n", (ptr2 ? "Success" : "Failed"));
-    printf("Remaining space: %zu bytes\n", allocator.GetAvailableSpaceSize());
-    
-    void* ptr3 = allocator.Allocate(20);
-    printf("Attempted to allocate 20 bytes: %s\n", (ptr3 ? "Success" : "Failed (Out of memory)"));
-    printf("Remaining space: %zu bytes\n", allocator.GetAvailableSpaceSize());
-}
-
-void DemonstratePracticalUsage()
-{
-    printf("\n=== Linear Allocator Practical Usage Demo ===\n");
-    
-    // Simulate frame-based allocation pattern
-    EAllocKit::LinearAllocator frameAllocator(4096); // 4KB for one frame
-    
-    printf("Simulating frame-based memory allocation...\n");
-    
-    // Frame 1: Allocate temporary objects
-    printf("\n--- Frame 1 ---\n");
-    
-    // Allocate array of integers
-    int* numbers = static_cast<int*>(frameAllocator.Allocate(10 * sizeof(int)));
-    if (numbers) {
-        for (int i = 0; i < 10; ++i) {
-            numbers[i] = i * i;
-        }
-        printf("Allocated and initialized array of 10 integers\n");
-        printf("First few values: %d, %d, %d\n", numbers[0], numbers[1], numbers[2]);
-    }
-    
-    // Allocate string buffer
-    char* buffer = static_cast<char*>(frameAllocator.Allocate(256));
-    if (buffer) {
-        std::strcpy(buffer, "Hello from LinearAllocator!");
-        printf("Allocated string buffer: \"%s\"\n", buffer);
-    }
-    
-    // Allocate struct array with alignment
-    struct alignas(16) Vector3 {
-        float x, y, z, w; // padded to 16 bytes
-    };
-    
-    Vector3* vectors = static_cast<Vector3*>(frameAllocator.Allocate(5 * sizeof(Vector3), 16));
-    if (vectors) {
-        for (int i = 0; i < 5; ++i) {
-            vectors[i] = {static_cast<float>(i), static_cast<float>(i + 1), static_cast<float>(i + 2), 0.0f};
-        }
-        printf("Allocated aligned array of 5 Vector3 structs\n");
-        printf("Vector[0]: (%.1f, %.1f, %.1f)\n", vectors[0].x, vectors[0].y, vectors[0].z);
-    }
-    
-    printf("Frame 1 memory usage: %zu bytes\n", 4096 - frameAllocator.GetAvailableSpaceSize());
-    
-    // End of frame: Reset for next frame
-    frameAllocator.Reset();
-    printf("\n--- Frame Reset ---\n");
-    printf("Memory reset for next frame. Available: %zu bytes\n", frameAllocator.GetAvailableSpaceSize());
-    
-    // Frame 2: New allocations
-    printf("\n--- Frame 2 ---\n");
-    double* doubles = static_cast<double*>(frameAllocator.Allocate(20 * sizeof(double)));
-    if (doubles) {
-        printf("Allocated array of 20 doubles in new frame\n");
-        printf("Memory reused from previous frame!\n");
-    }
-}
-
-void DemonstrateSTLContainers()
-{
-    printf("\n=== Linear Allocator with STL Containers Demo ===\n");
-    
-    // Create a linear allocator with enough space for our demo
-    EAllocKit::LinearAllocator allocator(2048);
-    
-    printf("Created LinearAllocator with 2048 bytes\n");
-    printf("Initial available space: %zu bytes\n", allocator.GetAvailableSpaceSize());
-    
-    // Define STL allocator adapter type for int
-    using IntVectorAllocator = EAllocKit::STLAllocatorAdapter<int, EAllocKit::LinearAllocator>;
-    using CustomIntVector = std::vector<int, IntVectorAllocator>;
-    
-    // Create vector with custom allocator
-    {
-        printf("\n--- Creating std::vector with LinearAllocator ---\n");
-        
-        CustomIntVector vec{IntVectorAllocator(&allocator)};
-        
-        printf("Empty vector created\n");
-        printf("Available space: %zu bytes\n", allocator.GetAvailableSpaceSize());
-        
-        // Add elements to vector
-        printf("Adding elements to vector...\n");
-        for (int i = 0; i < 10; ++i) {
-            vec.push_back(i * i);
-        }
-        
-        printf("Vector size: %zu elements\n", vec.size());
-        printf("Available space after adding 10 elements: %zu bytes\n", allocator.GetAvailableSpaceSize());
-        
-        // Display vector contents
-        printf("Vector contents: ");
-        for (size_t i = 0; i < vec.size(); ++i) {
-            printf("%d ", vec[i]);
-        }
-        printf("\n");
-        
-        // Reserve more space
-        printf("\nReserving space for 50 elements...\n");
-        vec.reserve(50);
-        printf("Vector capacity: %zu elements\n", vec.capacity());
-        printf("Available space after reserve: %zu bytes\n", allocator.GetAvailableSpaceSize());
-        
-        // Add more elements
-        printf("Adding 15 more elements...\n");
-        for (int i = 10; i < 25; ++i) {
-            vec.push_back(i * 2);
-        }
-        
-        printf("Vector size: %zu elements\n", vec.size());
-        printf("Available space: %zu bytes\n", allocator.GetAvailableSpaceSize());
-        
-        // Show some elements
-        printf("First 5 elements: ");
-        for (int i = 0; i < 5; ++i) {
-            printf("%d ", vec[i]);
-        }
-        printf("\nLast 5 elements: ");
-        for (size_t i = vec.size() - 5; i < vec.size(); ++i) {
-            printf("%d ", vec[i]);
-        }
-        printf("\n");
-    }
-    
-    printf("\n--- Vector destroyed (but memory not freed in LinearAllocator) ---\n");
-    printf("Available space after vector destruction: %zu bytes\n", allocator.GetAvailableSpaceSize());
-    printf("Note: LinearAllocator doesn't free memory on deallocate()\n");
-    
-    // Create another vector to show memory reuse limitation
-    {
-        printf("\n--- Creating second vector ---\n");
-        CustomIntVector vec2{IntVectorAllocator(&allocator)};
-        
-        // This will use more memory from the linear allocator
-        vec2.reserve(20);
-        for (int i = 0; i < 15; ++i) {
-            vec2.push_back(i * 3);
-        }
-        
-        printf("Second vector size: %zu elements\n", vec2.size());
-        printf("Available space: %zu bytes\n", allocator.GetAvailableSpaceSize());
-    }
-    
-    printf("\n--- Resetting allocator ---\n");
-    allocator.Reset();
-    printf("Available space after reset: %zu bytes\n", allocator.GetAvailableSpaceSize());
-    
-    // Show different types can be used with the same allocator
-    {
-        printf("\n--- Using LinearAllocator with vector<double> ---\n");
-        
-        using DoubleVectorAllocator = EAllocKit::STLAllocatorAdapter<double, EAllocKit::LinearAllocator>;
-        using CustomDoubleVector = std::vector<double, DoubleVectorAllocator>;
-        
-        CustomDoubleVector doubleVec{DoubleVectorAllocator(&allocator)};
-        
-        for (int i = 0; i < 8; ++i) {
-            doubleVec.push_back(i * 3.14159);
-        }
-        
-        printf("Double vector size: %zu elements\n", doubleVec.size());
-        printf("Available space: %zu bytes\n", allocator.GetAvailableSpaceSize());
-        
-        printf("Double vector contents: ");
-        for (const auto& val : doubleVec) {
-            printf("%.2f ", val);
-        }
-        printf("\n");
-    }
-}
-
-void DemonstrateErrorHandling()
-{
-    printf("\n=== Linear Allocator Error Handling Demo ===\n");
-    
-    try {
-        // Test invalid alignment (not power of 2)
-        printf("Testing invalid default alignment...\n");
-        EAllocKit::LinearAllocator invalidAllocator(1024, 3); // 3 is not power of 2
-        printf("ERROR: Should have thrown exception!\n");
-    } catch (const std::invalid_argument& e) {
-        printf("Caught expected exception: %s\n", e.what());
-    }
-    
-    try {
-        EAllocKit::LinearAllocator allocator(1024);
-        printf("\nTesting invalid alignment in Allocate...\n");
-        void* ptr = allocator.Allocate(100, 7); // 7 is not power of 2
-        printf("ERROR: Should have thrown exception!\n");
-    } catch (const std::invalid_argument& e) {
-        printf("Caught expected exception: %s\n", e.what());
-    }
-}
-
 int main()
 {
-    printf("LinearAllocator Usage Examples\n");
-    printf("==============================\n\n");
+    printf("=== Game Frame-Based Memory Allocation with LinearAllocator ===\n");
     
-    DemonstrateBasicUsage();
-    DemonstrateAlignment();
-    DemonstrateReset();
-    DemonstrateOutOfMemory();
-    DemonstratePracticalUsage();
-    DemonstrateSTLContainers();
-    DemonstrateErrorHandling();
+    // Create a LinearAllocator for frame-based memory management (8MB per frame)
+    EAllocKit::LinearAllocator frameAllocator(8 * 1024 * 1024);
+    
+    printf("Game Engine Frame Memory System\n");
+    printf("Frame allocator initialized: %.2f MB available\n", frameAllocator.GetAvailableSpaceSize() / (1024.0f * 1024.0f));
+    printf("Simulating game frames with temporary allocations...\n\n");
+    
+    // STL allocator adapters for different data types
+    using FloatVectorAllocator = EAllocKit::STLAllocatorAdapter<float, EAllocKit::LinearAllocator>;
+    using IntVectorAllocator = EAllocKit::STLAllocatorAdapter<int, EAllocKit::LinearAllocator>;
+    using Vec3VectorAllocator = EAllocKit::STLAllocatorAdapter<float[3], EAllocKit::LinearAllocator>;
+    
+    // Simulate multiple game frames
+    for (int frame = 1; frame <= 5; ++frame) {
+        printf("--- Game Frame %d ---\n", frame);
+        
+        // 1. Allocate vertex buffer for rendering (raw allocation)
+        const size_t vertexCount = 1000 + (frame * 200);  // More vertices each frame
+        struct Vertex { float x, y, z, nx, ny, nz, u, v; };  // 32 bytes per vertex
+        
+        Vertex* vertices = static_cast<Vertex*>(frameAllocator.Allocate(vertexCount * sizeof(Vertex)));
+        if (vertices) {
+            // Generate vertex data
+            for (size_t i = 0; i < vertexCount; ++i) {
+                float angle = static_cast<float>(i) / vertexCount * 6.28318f; // 2*PI
+                vertices[i] = {
+                    cosf(angle) * (frame * 0.5f),           // x
+                    sinf(angle) * (frame * 0.5f),           // y  
+                    static_cast<float>(frame),               // z
+                    cosf(angle), sinf(angle), 0.0f,         // normals
+                    static_cast<float>(i % 100) / 100.0f,   // u
+                    static_cast<float>(static_cast<int>(i)) / 1000.0f     // v
+                };
+            }
+            printf("  Allocated vertex buffer: %zu vertices (%.2f KB)\n", 
+                   vertexCount, (vertexCount * sizeof(Vertex)) / 1024.0f);
+        }
+        
+        // 2. Allocate visible object indices using STL vector
+        std::vector<int, IntVectorAllocator> visibleObjects{IntVectorAllocator(&frameAllocator)};
+        visibleObjects.reserve(500);
+        
+        // Simulate frustum culling - add visible object IDs
+        for (int i = 0; i < 800; ++i) {
+            if ((i + frame) % 3 != 0) {  // Simulate 2/3 objects being visible
+                visibleObjects.push_back(i);
+            }
+        }
+        printf("  Visible objects: %zu/%d (using STL vector with LinearAllocator)\n", 
+               visibleObjects.size(), 800);
+        
+        // 3. Allocate light data using STL vector
+        std::vector<float, FloatVectorAllocator> lightData{FloatVectorAllocator(&frameAllocator)};
+        const int lightCount = 50 + (frame * 10);
+        lightData.reserve(lightCount * 7);  // 7 floats per light (pos + color + intensity)
+        
+        for (int i = 0; i < lightCount; ++i) {
+            float radius = static_cast<float>(i) * 0.3f;
+            float angle = static_cast<float>(i) * 0.5f;
+            
+            // Position (xyz), Color (rgb), Intensity
+            lightData.insert(lightData.end(), {
+                cosf(angle) * radius,                    // x
+                sinf(angle) * radius,                    // y
+                static_cast<float>(frame) * 2.0f,        // z
+                0.8f + (i % 3) * 0.1f,                  // r
+                0.7f + ((i + 1) % 3) * 0.1f,            // g  
+                0.9f + ((i + 2) % 3) * 0.1f,            // b
+                1.0f - (static_cast<float>(i) / lightCount) * 0.5f  // intensity
+            });
+        }
+        printf("  Light system: %d lights (%.2f KB, using STL vector)\n", 
+               lightCount, (lightData.size() * sizeof(float)) / 1024.0f);
+        
+        // 4. Allocate particle system data
+        struct Particle { 
+            float x, y, z;          // position
+            float vx, vy, vz;       // velocity
+            float life, age;        // lifetime data
+            float size;             // particle size
+            int type;               // particle type
+        };
+        
+        const size_t particleCount = 2000 + (frame * 500);
+        Particle* particles = static_cast<Particle*>(
+            frameAllocator.Allocate(particleCount * sizeof(Particle), 16)  // 16-byte aligned for SIMD
+        );
+        
+        if (particles) {
+            // Initialize particle system
+            for (size_t i = 0; i < particleCount; ++i) {
+                float speed = static_cast<float>(rand()) / RAND_MAX * 5.0f;
+                float angle = static_cast<float>(rand()) / RAND_MAX * 6.28318f;
+                
+                particles[i] = {
+                    static_cast<float>(rand()) / RAND_MAX * 20.0f - 10.0f,  // x: -10 to 10
+                    static_cast<float>(rand()) / RAND_MAX * 20.0f - 10.0f,  // y: -10 to 10
+                    static_cast<float>(frame) * 3.0f,                       // z
+                    cosf(angle) * speed,                                     // vx
+                    sinf(angle) * speed,                                     // vy
+                    (static_cast<float>(rand()) / RAND_MAX - 0.5f) * 2.0f,  // vz
+                    3.0f + static_cast<float>(rand()) / RAND_MAX * 2.0f,     // life
+                    0.0f,                                                    // age
+                    0.1f + static_cast<float>(rand()) / RAND_MAX * 0.5f,     // size
+                    rand() % 4                                               // type
+                };
+            }
+            printf("  Particle system: %zu particles (%.2f KB, 16-byte aligned)\n", 
+                   particleCount, (particleCount * sizeof(Particle)) / 1024.0f);
+        }
+        
+        // 5. Allocate UI rendering data using STL vector
+        std::vector<float, FloatVectorAllocator> uiVertices{FloatVectorAllocator(&frameAllocator)};
+        
+        // Simulate UI elements: health bars, minimap, buttons, text
+        const int uiElements = 25 + (frame * 3);
+        uiVertices.reserve(uiElements * 24);  // 6 vertices * 4 floats per quad
+        
+        for (int i = 0; i < uiElements; ++i) {
+            float x = static_cast<float>(i % 10) * 100.0f;
+            float y = static_cast<float>(i) / 10.0f * 60.0f;
+            
+            // Generate quad vertices (2 triangles)
+            std::vector<float> quad = {
+                x, y, 0.0f, 1.0f,           // top-left
+                x + 80, y, 0.0f, 1.0f,      // top-right  
+                x, y + 50, 0.0f, 1.0f,      // bottom-left
+                x + 80, y, 0.0f, 1.0f,      // top-right
+                x + 80, y + 50, 0.0f, 1.0f, // bottom-right
+                x, y + 50, 0.0f, 1.0f       // bottom-left
+            };
+            uiVertices.insert(uiVertices.end(), quad.begin(), quad.end());
+        }
+        printf("  UI system: %d elements (%.2f KB, using STL vector)\n", 
+               uiElements, (uiVertices.size() * sizeof(float)) / 1024.0f);
+        
+        // 6. Allocate temporary string buffers for text rendering
+        char* debugStrings = static_cast<char*>(frameAllocator.Allocate(1024 * 16)); // 16KB for strings
+        if (debugStrings) {
+            // Simulate various debug/UI text generation
+            snprintf(debugStrings, 1024 * 16, 
+                "Frame: %d | Vertices: %zu | Lights: %d | Particles: %zu | UI Elements: %d | "
+                "FPS: %.1f | Memory Used: %.2f MB", 
+                frame, vertexCount, lightCount, particleCount, uiElements,
+                60.0f - frame * 2.0f,  // Simulate decreasing FPS
+                (8.0f * 1024.0f * 1024.0f - frameAllocator.GetAvailableSpaceSize()) / (1024.0f * 1024.0f)
+            );
+            printf("  Debug text: %.2f KB allocated for strings\n", 16.0f);
+        }
+        
+        printf("  Frame memory usage: %.2f MB / %.2f MB (%.1f%% used)\n",
+               (8.0f * 1024.0f * 1024.0f - frameAllocator.GetAvailableSpaceSize()) / (1024.0f * 1024.0f),
+               8.0f,
+               ((8.0f * 1024.0f * 1024.0f - frameAllocator.GetAvailableSpaceSize()) / (8.0f * 1024.0f * 1024.0f)) * 100.0f);
+        
+        // End of frame: Reset allocator for next frame (instant cleanup!)
+        frameAllocator.Reset();
+        printf("  Frame complete - all temporary memory instantly reclaimed!\n\n");
+    }
     
     return 0;
 }
