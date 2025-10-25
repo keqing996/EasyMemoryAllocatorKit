@@ -12,17 +12,6 @@ struct AllocatorMarker {};
 inline void* operator new(size_t, AllocatorMarker, void* ptr) { return ptr; }
 inline void operator delete(void*, AllocatorMarker, void*) { }
 
-template <typename Allocator>
-struct GlobalAllocator
-{
-    Allocator pAllocator = nullptr;
-
-    void Set(Allocator* p)
-    {
-        pAllocator = p;
-    }
-};
-
 template<typename T, typename Allocator>
 T* New(Allocator& pAllocator)
 {

@@ -6,6 +6,19 @@
 #include <cstdint>
 #include "EAllocKit/PoolAllocator.hpp"
 
+struct AllocatorMarker {};
+inline void* operator new(size_t, AllocatorMarker, void* ptr) { return ptr; }
+inline void operator delete(void*, AllocatorMarker, void*) { }
+
+template<typename T, typename Allocator>
+T* New(Allocator& pAllocator);
+
+template<typename T, typename... Args, typename Allocator>
+T* New(Allocator& pAllocator, Args&&... args);
+
+template<typename T, typename Allocator>
+void Delete(Allocator& pAllocator, T* p);
+
 void DemonstrateBasicPoolUsage()
 {
     printf("=== Pool Allocator Basic Usage Demo ===\n");
@@ -257,4 +270,31 @@ int main()
     DemonstrateFixedSizeAdvantage();
     
     return 0;
+}
+
+template<typename T, typename Allocator>
+T* New(Allocator& pAllocator)
+{
+    void* pMem = pAllocator.Allocate(sizeof(T));
+    if (pMem == nullptr)
+        return nullptr;
+    return new (AllocatorMarker(), pMem) T();
+}
+
+template<typename T, typename... Args, typename Allocator>
+T* New(Allocator& pAllocator, Args&&... args)
+{
+    void* pMem = pAllocator.Allocate(sizeof(T));
+    if (pMem == nullptr)
+        return nullptr;
+    return new (AllocatorMarker(), pMem) T(std::forward<Args>(args)...);
+}
+
+template<typename T, typename Allocator>
+void Delete(Allocator& pAllocator, T* p)
+{
+    if (!p)
+        return;
+    p->~T();
+    pAllocator.Deallocate(p);
 }
