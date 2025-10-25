@@ -220,8 +220,6 @@ void DemonstratePerformanceComparison()
     const int NUM_ITERATIONS = 5;
     const int ALLOCATIONS_PER_FRAME = 50;
     
-    auto start = std::chrono::high_resolution_clock::now();
-    
     for (int iteration = 0; iteration < NUM_ITERATIONS; ++iteration) {
         printf("\n--- Iteration %d ---\n", iteration + 1);
         
@@ -252,16 +250,8 @@ void DemonstratePerformanceComparison()
                allocator.GetCurrentFrameIndex());
     }
     
-    auto end = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    
     printf("\nCompleted %d iterations with %d allocations each\n", 
            NUM_ITERATIONS, ALLOCATIONS_PER_FRAME);
-    printf("Total time: %lld microseconds\n", duration.count());
-    printf("Average per iteration: %lld microseconds\n", duration.count() / NUM_ITERATIONS);
-    
-    printf("\nKey advantage: No need for individual deallocations!\n");
-    printf("All memory is reclaimed instantly on frame swap.\n");
 }
 
 void DemonstrateResetAllFrames()

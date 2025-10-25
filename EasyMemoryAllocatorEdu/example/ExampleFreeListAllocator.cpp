@@ -1,394 +1,222 @@
 #include <cstdio>
 #include <cstring>
 #include <vector>
-#include <cstdint>
+#include <string>
 #include "EAllocKit/FreeListAllocator.hpp"
 #include "EAllocKit/STLAllocatorAdapter.hpp"
 
-void DemonstrateBasicUsage()
-{
-    printf("=== Free List Allocator Basic Usage Demo ===\n");
-    
-    // Create a free list allocator with 2KB memory pool
-    EAllocKit::FreeListAllocator allocator(2048);
-    
-    printf("Created FreeListAllocator with 2048 bytes\n");
-    printf("Memory block starts at: %p\n", allocator.GetMemoryBlockPtr());
-    printf("First node at: %p\n", allocator.GetFirstNode());
-    
-    // Allocate some memory blocks of different sizes
-    void* ptr1 = allocator.Allocate(100);
-    printf("\nAllocated 100 bytes at: %p\n", ptr1);
-    
-    void* ptr2 = allocator.Allocate(200);
-    printf("Allocated 200 bytes at: %p\n", ptr2);
-    
-    void* ptr3 = allocator.Allocate(50);
-    printf("Allocated 50 bytes at: %p\n", ptr3);
-    
-    void* ptr4 = allocator.Allocate(150);
-    printf("Allocated 150 bytes at: %p\n", ptr4);
-    
-    // Demonstrate deallocating specific blocks
-    printf("\nDeallocating ptr2 (200 bytes)...\n");
-    allocator.Deallocate(ptr2);
-    
-    // Allocate a smaller block that should fit in the freed space
-    void* ptr5 = allocator.Allocate(80);
-    printf("Allocated 80 bytes (should reuse freed space) at: %p\n", ptr5);
-    
-    // Deallocate more blocks
-    printf("\nDeallocating ptr1 and ptr3...\n");
-    allocator.Deallocate(ptr1);
-    allocator.Deallocate(ptr3);
-    
-    // Try to allocate a larger block that might span merged free spaces
-    void* ptr6 = allocator.Allocate(120);
-    printf("Allocated 120 bytes (should merge free spaces) at: %p\n", ptr6);
-    
-    // Clean up remaining allocations
-    allocator.Deallocate(ptr4);
-    allocator.Deallocate(ptr5);
-    allocator.Deallocate(ptr6);
-}
-
-void DemonstrateAlignment()
-{
-    printf("\n=== Free List Allocator Alignment Demo ===\n");
-    
-    // Create allocator with 8-byte default alignment
-    EAllocKit::FreeListAllocator allocator(2048, 8);
-    
-    printf("Allocator created with 8-byte default alignment\n");
-    
-    // Allocate with default alignment
-    void* ptr1 = allocator.Allocate(1);
-    printf("Allocated 1 byte with default alignment at: %p\n", ptr1);
-    printf("Address alignment: %zu (should be 0)\n", reinterpret_cast<uintptr_t>(ptr1) % 8);
-    
-    // Allocate with custom alignment
-    void* ptr2 = allocator.Allocate(1, 16);
-    printf("Allocated 1 byte with 16-byte alignment at: %p\n", ptr2);
-    printf("Address alignment: %zu (should be 0)\n", reinterpret_cast<uintptr_t>(ptr2) % 16);
-    
-    void* ptr3 = allocator.Allocate(1, 32);
-    printf("Allocated 1 byte with 32-byte alignment at: %p\n", ptr3);
-    printf("Address alignment: %zu (should be 0)\n", reinterpret_cast<uintptr_t>(ptr3) % 32);
-    
-    void* ptr4 = allocator.Allocate(1, 64);
-    printf("Allocated 1 byte with 64-byte alignment at: %p\n", ptr4);
-    printf("Address alignment: %zu (should be 0)\n", reinterpret_cast<uintptr_t>(ptr4) % 64);
-    
-    // Clean up
-    allocator.Deallocate(ptr1);
-    allocator.Deallocate(ptr2);
-    allocator.Deallocate(ptr3);
-    allocator.Deallocate(ptr4);
-}
-
-void DemonstrateFragmentation()
-{
-    printf("\n=== Free List Allocator Fragmentation Demo ===\n");
-    
-    EAllocKit::FreeListAllocator allocator(1024);
-    
-    printf("Demonstrating memory fragmentation and coalescing...\n");
-    
-    // Allocate several blocks
-    void* ptrs[6];
-    size_t sizes[] = {64, 32, 96, 48, 80, 56};
-    
-    printf("\nAllocating 6 blocks:\n");
-    for (int i = 0; i < 6; ++i) {
-        ptrs[i] = allocator.Allocate(sizes[i]);
-        printf("Block %d: %zu bytes at %p\n", i + 1, sizes[i], ptrs[i]);
-    }
-    
-    // Deallocate every other block to create fragmentation
-    printf("\nDeallocating blocks 2, 4, and 6 to create fragmentation:\n");
-    allocator.Deallocate(ptrs[1]);  // Block 2
-    allocator.Deallocate(ptrs[3]);  // Block 4
-    allocator.Deallocate(ptrs[5]);  // Block 6
-    
-    // Try to allocate blocks that fit in the freed spaces
-    printf("\nTrying to allocate new blocks in fragmented space:\n");
-    void* newPtr1 = allocator.Allocate(30);  // Should fit in freed 32-byte block
-    printf("Allocated 30 bytes at: %p\n", newPtr1);
-    
-    void* newPtr2 = allocator.Allocate(45);  // Should fit in freed 48-byte block
-    printf("Allocated 45 bytes at: %p\n", newPtr2);
-    
-    // Deallocate adjacent blocks to demonstrate coalescing
-    printf("\nDeallocating blocks 1 and 3 to demonstrate coalescing:\n");
-    allocator.Deallocate(ptrs[0]);  // Block 1
-    allocator.Deallocate(ptrs[2]);  // Block 3
-    
-    // Now try to allocate a larger block that should use the merged space
-    void* largePtr = allocator.Allocate(140);  // Should use merged free space
-    printf("Allocated 140 bytes (using merged space) at: %p\n", largePtr);
-    
-    // Clean up
-    allocator.Deallocate(ptrs[4]);
-    allocator.Deallocate(newPtr1);
-    allocator.Deallocate(newPtr2);
-    allocator.Deallocate(largePtr);
-}
-
-void DemonstrateOutOfMemory()
-{
-    printf("\n=== Free List Allocator Out of Memory Demo ===\n");
-    
-    // Create small allocator to demonstrate exhaustion
-    EAllocKit::FreeListAllocator allocator(256);
-    
-    printf("Created allocator with 256 bytes capacity\n");
-    
-    // Allocate blocks until we run out of memory
-    std::vector<void*> allocations;
-    size_t totalAllocated = 0;
-    
-    printf("Allocating 40-byte blocks until exhaustion:\n");
-    for (int i = 0; i < 10; ++i) {
-        void* ptr = allocator.Allocate(40);
-        if (ptr) {
-            allocations.push_back(ptr);
-            totalAllocated += 40;
-            printf("Allocation %d: Success (total: %zu bytes)\n", i + 1, totalAllocated);
-        } else {
-            printf("Allocation %d: Failed (Out of memory)\n", i + 1);
-            break;
-        }
-    }
-    
-    // Free some blocks in the middle
-    if (allocations.size() >= 3) {
-        printf("\nFreeing allocation 2 and 4...\n");
-        allocator.Deallocate(allocations[1]);
-        allocator.Deallocate(allocations[3]);
-        
-        // Try to allocate again
-        void* ptr = allocator.Allocate(35);
-        if (ptr) {
-            printf("New allocation of 35 bytes: Success at %p\n", ptr);
-            allocations.push_back(ptr);
-        } else {
-            printf("New allocation of 35 bytes: Failed\n");
-        }
-    }
-    
-    // Clean up remaining allocations
-    for (void* ptr : allocations) {
-        if (ptr) allocator.Deallocate(ptr);
-    }
-}
-
-void DemonstrateSTLContainers()
-{
-    printf("\n=== Free List Allocator with STL Containers Demo ===\n");
-    
-    // Create a free list allocator with enough space
-    EAllocKit::FreeListAllocator allocator(4096);
-    
-    printf("Created FreeListAllocator with 4096 bytes\n");
-    
-    // Define STL allocator adapter type for int
-    using IntVectorAllocator = EAllocKit::STLAllocatorAdapter<int, EAllocKit::FreeListAllocator>;
-    using CustomIntVector = std::vector<int, IntVectorAllocator>;
-    
-    // Create vector with custom allocator
-    {
-        printf("\n--- Creating std::vector with FreeListAllocator ---\n");
-        
-        CustomIntVector vec{IntVectorAllocator(&allocator)};
-        
-        printf("Empty vector created\n");
-        
-        // Add elements to vector
-        printf("Adding elements to vector...\n");
-        for (int i = 0; i < 15; ++i) {
-            vec.push_back(i * i);
-        }
-        
-        printf("Vector size: %zu elements\n", vec.size());
-        
-        // Display vector contents
-        printf("Vector contents: ");
-        for (size_t i = 0; i < vec.size(); ++i) {
-            printf("%d ", vec[i]);
-        }
-        printf("\n");
-        
-        // Resize vector to demonstrate deallocation and reallocation
-        printf("\nResizing vector to 8 elements...\n");
-        vec.resize(8);
-        printf("Vector size after resize: %zu elements\n", vec.size());
-        
-        // Add more elements
-        printf("Adding more elements...\n");
-        for (int i = 15; i < 20; ++i) {
-            vec.push_back(i * 2);
-        }
-        
-        printf("Vector size: %zu elements\n", vec.size());
-        printf("Final contents: ");
-        for (const auto& val : vec) {
-            printf("%d ", val);
-        }
-        printf("\n");
-    }
-    
-    printf("\n--- Creating multiple vectors to show memory management ---\n");
-    
-    // Create multiple vectors to show how FreeListAllocator manages memory
-    {
-        CustomIntVector vec1{IntVectorAllocator(&allocator)};
-        CustomIntVector vec2{IntVectorAllocator(&allocator)};
-        
-        // Populate vectors
-        for (int i = 0; i < 10; ++i) {
-            vec1.push_back(i);
-            vec2.push_back(i * 10);
-        }
-        
-        printf("Vector 1 size: %zu, Vector 2 size: %zu\n", vec1.size(), vec2.size());
-        
-        // Clear first vector
-        vec1.clear();
-        vec1.shrink_to_fit();  // This should deallocate memory
-        
-        printf("After clearing vec1, creating vec3...\n");
-        
-        CustomIntVector vec3{IntVectorAllocator(&allocator)};
-        for (int i = 0; i < 12; ++i) {
-            vec3.push_back(i * 100);
-        }
-        
-        printf("Vector 3 size: %zu (should reuse freed memory from vec1)\n", vec3.size());
-    }
-}
-
-void DemonstratePracticalUsage()
-{
-    printf("\n=== Free List Allocator Practical Usage Demo ===\n");
-    
-    // Simulate a typical use case: object pool with frequent allocation/deallocation
-    EAllocKit::FreeListAllocator allocator(2048);
-    
-    printf("Simulating object pool with frequent allocations...\n");
-    
-    // Define a simple object structure
-    struct GameObject {
-        float x, y, z;        // Position
-        float vx, vy, vz;     // Velocity
-        int health;
-        int id;
-    };
-    
-    std::vector<GameObject*> activeObjects;
-    
-    printf("\n--- Phase 1: Creating initial objects ---\n");
-    // Create initial set of objects
-    for (int i = 0; i < 8; ++i) {
-        GameObject* obj = static_cast<GameObject*>(allocator.Allocate(sizeof(GameObject)));
-        if (obj) {
-            *obj = {
-                static_cast<float>(i), static_cast<float>(i + 1), static_cast<float>(i + 2),  // position
-                0.1f * i, 0.1f * (i + 1), 0.1f * (i + 2),                                    // velocity
-                100 - i * 5,                                                                  // health
-                i                                                                             // id
-            };
-            activeObjects.push_back(obj);
-            printf("Created object %d at %p (health: %d)\n", i, obj, obj->health);
-        }
-    }
-    
-    printf("\n--- Phase 2: Destroying some objects ---\n");
-    // Destroy every other object to create fragmentation
-    for (size_t i = 1; i < activeObjects.size(); i += 2) {
-        printf("Destroying object %d at %p\n", activeObjects[i]->id, activeObjects[i]);
-        allocator.Deallocate(activeObjects[i]);
-        activeObjects[i] = nullptr;
-    }
-    
-    printf("\n--- Phase 3: Creating new objects (should reuse freed memory) ---\n");
-    // Create new objects that should reuse the freed memory
-    for (int i = 10; i < 14; ++i) {
-        GameObject* obj = static_cast<GameObject*>(allocator.Allocate(sizeof(GameObject)));
-        if (obj) {
-            *obj = {
-                static_cast<float>(i * 2), static_cast<float>(i * 2 + 1), static_cast<float>(i * 2 + 2),
-                0.2f * i, 0.2f * (i + 1), 0.2f * (i + 2),
-                200 - i * 3,
-                i
-            };
-            activeObjects.push_back(obj);
-            printf("Created new object %d at %p (health: %d) - reusing freed memory\n", i, obj, obj->health);
-        }
-    }
-    
-    printf("\n--- Phase 4: Final object states ---\n");
-    printf("Active objects:\n");
-    for (size_t i = 0; i < activeObjects.size(); ++i) {
-        if (activeObjects[i]) {
-            GameObject* obj = activeObjects[i];
-            printf("  Object %d: pos(%.1f,%.1f,%.1f) health=%d at %p\n", 
-                   obj->id, obj->x, obj->y, obj->z, obj->health, obj);
-        }
-    }
-    
-    // Clean up all remaining objects
-    printf("\n--- Cleanup ---\n");
-    for (GameObject* obj : activeObjects) {
-        if (obj) {
-            allocator.Deallocate(obj);
-        }
-    }
-    printf("All objects cleaned up\n");
-}
-
-void DemonstrateErrorHandling()
-{
-    printf("\n=== Free List Allocator Error Handling Demo ===\n");
-    
-    try {
-        // Test invalid alignment (not power of 2)
-        printf("Testing invalid default alignment...\n");
-        EAllocKit::FreeListAllocator invalidAllocator(1024, 3); // 3 is not power of 2
-        printf("ERROR: Should have thrown exception!\n");
-    } catch (const std::invalid_argument& e) {
-        printf("Caught expected exception: %s\n", e.what());
-    }
-    
-    try {
-        EAllocKit::FreeListAllocator allocator(1024);
-        printf("\nTesting invalid alignment in Allocate...\n");
-        void* ptr = allocator.Allocate(100, 7); // 7 is not power of 2
-        printf("ERROR: Should have thrown exception!\n");
-    } catch (const std::invalid_argument& e) {
-        printf("Caught expected exception: %s\n", e.what());
-    }
-    
-    // Test null pointer deallocation (should be safe)
-    {
-        printf("\nTesting null pointer deallocation (should be safe)...\n");
-        EAllocKit::FreeListAllocator allocator(1024);
-        allocator.Deallocate(nullptr);
-        printf("Null pointer deallocation completed safely\n");
-    }
-}
-
 int main()
 {
-    printf("FreeListAllocator Usage Examples\n");
-    printf("=================================\n\n");
+    printf("=== HTTP Server Connection Pool with FreeListAllocator ===\n");
     
-    DemonstrateBasicUsage();
-    DemonstrateAlignment();
-    DemonstrateFragmentation();
-    DemonstrateOutOfMemory();
-    DemonstrateSTLContainers();
-    DemonstratePracticalUsage();
-    DemonstrateErrorHandling();
+    // Create a FreeListAllocator for managing HTTP connection resources (16MB pool)
+    EAllocKit::FreeListAllocator connectionAllocator(16 * 1024 * 1024);
+    
+    printf("HTTP Server Memory Pool initialized: 16.00 MB\n");
+    printf("Simulating incoming HTTP requests with varying payload sizes...\n\n");
+    
+    // Define connection data structures
+    struct HTTPRequest {
+        char method[16];          // GET, POST, PUT, DELETE, etc.
+        char path[256];           // Request path
+        char* headers;            // Variable-size headers
+        char* body;               // Variable-size body
+        size_t headerSize;
+        size_t bodySize;
+        int connectionId;
+    };
+    
+    struct HTTPResponse {
+        int statusCode;
+        char* headers;
+        char* body;
+        size_t headerSize;
+        size_t bodySize;
+    };
+    
+    struct Connection {
+        HTTPRequest* request;
+        HTTPResponse* response;
+        int id;
+        bool active;
+    };
+    
+    // STL allocator adapter for managing active connections
+    using ConnectionVectorAllocator = EAllocKit::STLAllocatorAdapter<Connection*, EAllocKit::FreeListAllocator>;
+    std::vector<Connection*, ConnectionVectorAllocator> activeConnections{ConnectionVectorAllocator(&connectionAllocator)};
+    
+    auto allocateConnection = [&](int id, const char* method, const char* path, 
+                                  size_t headerSize, size_t bodySize) -> Connection* {
+        // Allocate connection structure
+        Connection* conn = static_cast<Connection*>(connectionAllocator.Allocate(sizeof(Connection)));
+        if (!conn) return nullptr;
+        
+        // Allocate request
+        conn->request = static_cast<HTTPRequest*>(connectionAllocator.Allocate(sizeof(HTTPRequest)));
+        if (!conn->request) {
+            connectionAllocator.Deallocate(conn);
+            return nullptr;
+        }
+        
+        // Allocate variable-size headers and body
+        conn->request->headers = static_cast<char*>(connectionAllocator.Allocate(headerSize));
+        conn->request->body = static_cast<char*>(connectionAllocator.Allocate(bodySize));
+        
+        // Initialize request data
+        strncpy(conn->request->method, method, sizeof(conn->request->method) - 1);
+        strncpy(conn->request->path, path, sizeof(conn->request->path) - 1);
+        conn->request->headerSize = headerSize;
+        conn->request->bodySize = bodySize;
+        conn->request->connectionId = id;
+        
+        // Allocate response
+        conn->response = static_cast<HTTPResponse*>(connectionAllocator.Allocate(sizeof(HTTPResponse)));
+        conn->id = id;
+        conn->active = true;
+        
+        return conn;
+    };
+    
+    auto deallocateConnection = [&](Connection* conn) {
+        if (!conn) return;
+        
+        if (conn->request) {
+            connectionAllocator.Deallocate(conn->request->headers);
+            connectionAllocator.Deallocate(conn->request->body);
+            connectionAllocator.Deallocate(conn->request);
+        }
+        
+        if (conn->response) {
+            connectionAllocator.Deallocate(conn->response->headers);
+            connectionAllocator.Deallocate(conn->response->body);
+            connectionAllocator.Deallocate(conn->response);
+        }
+        
+        connectionAllocator.Deallocate(conn);
+    };
+    
+    // Simulate multiple request/response cycles
+    printf("--- Request Cycle 1: Initial Connections ---\n");
+    
+    // Small GET request (lightweight)
+    Connection* conn1 = allocateConnection(1, "GET", "/api/users", 512, 0);
+    if (conn1) {
+        activeConnections.push_back(conn1);
+        printf("Connection #%d: GET /api/users (headers: 512B, body: 0B)\n", conn1->id);
+    }
+    
+    // POST request with JSON payload (medium)
+    Connection* conn2 = allocateConnection(2, "POST", "/api/users/create", 768, 2048);
+    if (conn2) {
+        activeConnections.push_back(conn2);
+        printf("Connection #%d: POST /api/users/create (headers: 768B, body: 2KB)\n", conn2->id);
+    }
+    
+    // Large file upload (heavy)
+    Connection* conn3 = allocateConnection(3, "POST", "/api/upload", 1024, 512 * 1024);
+    if (conn3) {
+        activeConnections.push_back(conn3);
+        printf("Connection #%d: POST /api/upload (headers: 1KB, body: 512KB)\n", conn3->id);
+    }
+    
+    // Another small GET
+    Connection* conn4 = allocateConnection(4, "GET", "/api/products", 512, 0);
+    if (conn4) {
+        activeConnections.push_back(conn4);
+        printf("Connection #%d: GET /api/products (headers: 512B, body: 0B)\n", conn4->id);
+    }
+    
+    printf("Active connections: %zu\n", activeConnections.size());
+    printf("FreeListAllocator manages variable-size allocations efficiently\n\n");
+    
+    // Simulate completing some requests (free list will manage freed memory)
+    printf("--- Request Cycle 2: Complete Some Requests ---\n");
+    
+    // Complete the file upload (frees large chunk)
+    printf("Completing connection #%d (freeing 512KB)...\n", conn3->id);
+    deallocateConnection(conn3);
+    activeConnections[2] = nullptr;
+    
+    // Complete one small request
+    printf("Completing connection #%d...\n", conn1->id);
+    deallocateConnection(conn1);
+    activeConnections[0] = nullptr;
+    
+    printf("Memory freed, available for reuse\n\n");
+    
+    // New requests arrive - FreeListAllocator reuses freed memory efficiently
+    printf("--- Request Cycle 3: New Requests Reuse Memory ---\n");
+    
+    // Medium POST (should reuse part of freed 512KB)
+    Connection* conn5 = allocateConnection(5, "POST", "/api/data", 1024, 64 * 1024);
+    if (conn5) {
+        activeConnections.push_back(conn5);
+        printf("Connection #%d: POST /api/data (headers: 1KB, body: 64KB) - reusing freed memory\n", conn5->id);
+    }
+    
+    // Multiple small requests (efficient for small allocations)
+    Connection* conn6 = allocateConnection(6, "GET", "/health", 256, 0);
+    Connection* conn7 = allocateConnection(7, "GET", "/metrics", 256, 0);
+    Connection* conn8 = allocateConnection(8, "GET", "/status", 256, 0);
+    
+    if (conn6 && conn7 && conn8) {
+        activeConnections.push_back(conn6);
+        activeConnections.push_back(conn7);
+        activeConnections.push_back(conn8);
+        printf("Connections #6-8: GET requests (lightweight, headers: 256B each)\n");
+    }
+    
+    // Large response generation (e.g., API returning dataset)
+    Connection* conn9 = allocateConnection(9, "GET", "/api/reports/full", 1024, 0);
+    if (conn9) {
+        // Allocate large response body
+        conn9->response->bodySize = 256 * 1024;
+        conn9->response->body = static_cast<char*>(connectionAllocator.Allocate(256 * 1024));
+        activeConnections.push_back(conn9);
+        printf("Connection #%d: GET /api/reports/full (response body: 256KB)\n", conn9->id);
+    }
+    
+    printf("\nActive connections: %zu\n", activeConnections.size() - 2); // -2 for nullptrs
+    printf("Memory fragmentation handled efficiently by FreeListAllocator\n\n");
+    
+    // Using STL containers with the allocator
+    printf("--- Request Cycle 4: Using STL Containers ---\n");
+    
+    using StringVectorAllocator = EAllocKit::STLAllocatorAdapter<std::string, EAllocKit::FreeListAllocator>;
+    
+    // Simulate parsing request headers into a vector
+    std::vector<std::string, StringVectorAllocator> requestHeaders{StringVectorAllocator(&connectionAllocator)};
+    requestHeaders.reserve(10);
+    
+    requestHeaders.push_back("Host: api.example.com");
+    requestHeaders.push_back("User-Agent: Mozilla/5.0");
+    requestHeaders.push_back("Accept: application/json");
+    requestHeaders.push_back("Content-Type: application/json");
+    requestHeaders.push_back("Authorization: Bearer token123");
+    
+    printf("Parsed %zu request headers using STL vector with FreeListAllocator\n", requestHeaders.size());
+    
+    // Simulate session data storage
+    using IntAllocator = EAllocKit::STLAllocatorAdapter<int, EAllocKit::FreeListAllocator>;
+    std::vector<int, IntAllocator> sessionIds{IntAllocator(&connectionAllocator)};
+    
+    for (int i = 1000; i < 1050; ++i) {
+        sessionIds.push_back(i);
+    }
+    
+    printf("Stored %zu active session IDs\n\n", sessionIds.size());
+    
+    // Cleanup all connections
+    printf("--- Cleanup: Closing All Connections ---\n");
+    
+    for (Connection* conn : activeConnections) {
+        if (conn) {
+            printf("Closing connection #%d\n", conn->id);
+            deallocateConnection(conn);
+        }
+    }
+    
+    printf("\nAll connections closed\n");
     
     return 0;
 }
