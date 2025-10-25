@@ -5,6 +5,19 @@
 #include "EAllocKit/FreeListAllocator.hpp"
 #include "EAllocKit/STLAllocatorAdapter.hpp"
 
+struct AllocatorMarker {};
+inline void* operator new(size_t, AllocatorMarker, void* ptr) { return ptr; }
+inline void operator delete(void*, AllocatorMarker, void*) { }
+
+template<typename T, typename Allocator>
+T* New(Allocator& pAllocator);
+
+template<typename T, typename... Args, typename Allocator>
+T* New(Allocator& pAllocator, Args&&... args);
+
+template<typename T, typename Allocator>
+void Delete(Allocator& pAllocator, T* p);
+
 int main()
 {
     printf("=== HTTP Server Connection Pool with FreeListAllocator ===\n");
@@ -48,13 +61,13 @@ int main()
     auto allocateConnection = [&](int id, const char* method, const char* path, 
                                   size_t headerSize, size_t bodySize) -> Connection* {
         // Allocate connection structure
-        Connection* conn = static_cast<Connection*>(connectionAllocator.Allocate(sizeof(Connection)));
+        Connection* conn = New<Connection>(connectionAllocator);
         if (!conn) return nullptr;
         
         // Allocate request
-        conn->request = static_cast<HTTPRequest*>(connectionAllocator.Allocate(sizeof(HTTPRequest)));
+        conn->request = New<HTTPRequest>(connectionAllocator);
         if (!conn->request) {
-            connectionAllocator.Deallocate(conn);
+            Delete(connectionAllocator, conn);
             return nullptr;
         }
         
@@ -70,7 +83,7 @@ int main()
         conn->request->connectionId = id;
         
         // Allocate response
-        conn->response = static_cast<HTTPResponse*>(connectionAllocator.Allocate(sizeof(HTTPResponse)));
+        conn->response = New<HTTPResponse>(connectionAllocator);
         conn->id = id;
         conn->active = true;
         
@@ -83,16 +96,16 @@ int main()
         if (conn->request) {
             connectionAllocator.Deallocate(conn->request->headers);
             connectionAllocator.Deallocate(conn->request->body);
-            connectionAllocator.Deallocate(conn->request);
+            Delete(connectionAllocator, conn->request);
         }
         
         if (conn->response) {
             connectionAllocator.Deallocate(conn->response->headers);
             connectionAllocator.Deallocate(conn->response->body);
-            connectionAllocator.Deallocate(conn->response);
+            Delete(connectionAllocator, conn->response);
         }
         
-        connectionAllocator.Deallocate(conn);
+        Delete(connectionAllocator, conn);
     };
     
     // Simulate multiple request/response cycles
@@ -219,4 +232,31 @@ int main()
     printf("\nAll connections closed\n");
     
     return 0;
+}
+
+template<typename T, typename Allocator>
+T* New(Allocator& pAllocator)
+{
+    void* pMem = pAllocator.Allocate(sizeof(T));
+    if (pMem == nullptr)
+        return nullptr;
+    return new (AllocatorMarker(), pMem) T();
+}
+
+template<typename T, typename... Args, typename Allocator>
+T* New(Allocator& pAllocator, Args&&... args)
+{
+    void* pMem = pAllocator.Allocate(sizeof(T));
+    if (pMem == nullptr)
+        return nullptr;
+    return new (AllocatorMarker(), pMem) T(std::forward<Args>(args)...);
+}
+
+template<typename T, typename Allocator>
+void Delete(Allocator& pAllocator, T* p)
+{
+    if (!p)
+        return;
+    p->~T();
+    pAllocator.Deallocate(p);
 }
