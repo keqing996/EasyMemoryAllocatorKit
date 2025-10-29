@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -14,7 +15,7 @@ namespace EAllocKit
     private:
         static constexpr size_t MIN_BLOCK_SIZE = 32;  // Minimum allocation size
         static constexpr size_t MAX_ORDER = 32;       // Maximum number of size classes
-        
+
         struct FreeBlock
         {
             FreeBlock* next;
@@ -157,78 +158,57 @@ namespace EAllocKit
         // Check for size overflow - if size is too large, return nullptr
         if (size > _size)
             return nullptr;
-        
-        // Buddy allocator doesn't support arbitrary alignment efficiently
-        size_t adjustedSize = size;
-        if (alignment > _defaultAlignment)
-        {
-            // Check for overflow in size + alignment
-            if (SIZE_MAX - size < alignment)
-                return nullptr;
-            adjustedSize = size + alignment;
-        }
-        
-        // Check if adjustedSize is larger than our total capacity
-        if (adjustedSize > _size)
+
+        alignment = std::max(alignment, _defaultAlignment);
+
+        size_t blockSize = RoundUpToPowerOf2(size);
+        if (blockSize == 0 || blockSize < size)
             return nullptr;
-        
-        // Round up to power of 2, with minimum size
-        size_t blockSize = RoundUpToPowerOf2(adjustedSize);
-        
-        // Check for overflow in RoundUpToPowerOf2 (it returns 0 on overflow)
-        if (blockSize == 0 || blockSize < adjustedSize)
-            return nullptr;
-            
+
         if (blockSize < MIN_BLOCK_SIZE)
             blockSize = MIN_BLOCK_SIZE;
-        
+
+        if (blockSize < alignment)
+            blockSize = RoundUpToPowerOf2(alignment);
+
+        if (blockSize == 0 || blockSize < alignment)
+            return nullptr;
+
         size_t order = GetOrderFromSize(blockSize);
         if (order >= _maxOrder)
             return nullptr;
-        
-        void* block = AllocateBlock(order);
-        
-        // Handle alignment if needed
-        if (alignment > _defaultAlignment && block)
-        {
-            uintptr_t addr = reinterpret_cast<uintptr_t>(block);
-            uintptr_t aligned = (addr + alignment - 1) & ~(alignment - 1);
-            if (aligned != addr)
-            {
-                // For simplicity, allocate a larger block to accommodate alignment
-                // Return the aligned address within the block
-                return reinterpret_cast<void*>(aligned);
-            }
-        }
-        
-        return block;
+
+        return AllocateBlock(order);
     }
     
     inline auto BuddyAllocator::Deallocate(void* ptr) -> void
     {
         if (!ptr)
             return;
-        
-        // Find the order of this block by checking bitmap
+
+        uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
+        uintptr_t base = reinterpret_cast<uintptr_t>(_pData);
+
+        if (addr < base || addr >= base + _size)
+            return;
+
         size_t index = GetBlockIndex(ptr);
-        
-        // Try to find the correct order by checking which order this block belongs to
-        for (size_t order = 0; order < _maxOrder; ++order)
+
+        for (size_t order = _maxOrder; order-- > 0;)
         {
             size_t blockSize = GetSizeFromOrder(order);
-            size_t blockIndex = index / (blockSize / MIN_BLOCK_SIZE);
-            
-            if (IsBlockFree(blockIndex * (blockSize / MIN_BLOCK_SIZE), order))
+            if ((addr - base) % blockSize != 0)
                 continue;
-            
-            // Check if this pointer aligns to this order
-            uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
-            uintptr_t base = reinterpret_cast<uintptr_t>(_pData);
-            if ((addr - base) % blockSize == 0)
-            {
-                DeallocateBlock(ptr, order);
-                return;
-            }
+
+            size_t blocksPerAllocation = blockSize / MIN_BLOCK_SIZE;
+            size_t blockIndex = index / blocksPerAllocation;
+            size_t firstMinIndex = blockIndex * blocksPerAllocation;
+
+            if (IsBlockFree(firstMinIndex, order))
+                continue;
+
+            DeallocateBlock(ptr, order);
+            return;
         }
     }
     
