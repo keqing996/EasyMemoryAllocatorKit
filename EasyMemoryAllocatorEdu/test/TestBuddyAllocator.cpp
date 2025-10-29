@@ -436,6 +436,41 @@ TEST_CASE("BuddyAllocator - Alignment Edge Cases")
     }
 }
 
+TEST_CASE("BuddyAllocator - Deallocation Regression Cases")
+{
+    SUBCASE("Full block reuse after free")
+    {
+        BuddyAllocator allocator(64, 8);
+
+        void* first = allocator.Allocate(64);
+        REQUIRE(first != nullptr);
+
+        allocator.Deallocate(first);
+
+        void* second = allocator.Allocate(64);
+        CHECK(second != nullptr);
+
+        if (second)
+            allocator.Deallocate(second);
+    }
+
+    SUBCASE("Aligned allocation releases entire block")
+    {
+        BuddyAllocator allocator(256, 8);
+
+        void* alignedPtr = allocator.Allocate(64, 64);
+        REQUIRE(alignedPtr != nullptr);
+
+        allocator.Deallocate(alignedPtr);
+
+        void* large = allocator.Allocate(256);
+        CHECK(large != nullptr);
+
+        if (large)
+            allocator.Deallocate(large);
+    }
+}
+
 TEST_CASE("BuddyAllocator - Invalid Input Handling")
 {
     SUBCASE("Invalid alignment values")

@@ -13,11 +13,12 @@ namespace EAllocKit
         // Checkpoint represents a saved state of the arena
         struct Checkpoint 
         {
-            void* pSaved;
+            uint8_t* pSaved;
             size_t remainingBytes;
             
             Checkpoint() : pSaved(nullptr), remainingBytes(0) {}
-            Checkpoint(void* ptr, size_t remaining) : pSaved(ptr), remainingBytes(remaining) {}
+            Checkpoint(uint8_t* ptr, size_t remaining) : pSaved(ptr), remainingBytes(remaining) {}
+            Checkpoint(void* ptr, size_t remaining) : pSaved(static_cast<uint8_t*>(ptr)), remainingBytes(remaining) {}
             auto IsValid() const -> bool { return pSaved != nullptr; }
         };
 
@@ -177,13 +178,13 @@ namespace EAllocKit
             return;
         
         // Validate checkpoint is within our memory bounds
-        uint8_t* base = _pMemory;
-        uint8_t* end = _pMemory + _capacity;
+        const auto base = _pMemory;
+        const auto end = _pMemory + _capacity;
         
         if (checkpoint.pSaved < base || checkpoint.pSaved > end)
             return;
         
-        _pCurrent = static_cast<uint8_t*>(checkpoint.pSaved);
+        _pCurrent = checkpoint.pSaved;
     }
     
     inline auto ArenaAllocator::CreateScope() -> ScopeGuard
@@ -211,10 +212,11 @@ namespace EAllocKit
         if (!ptr) 
             return false;
         
-        uint8_t* base = _pMemory;
-        uint8_t* end = _pMemory + _capacity;
-        
-        return ptr >= base && ptr < end;
+    const auto base = _pMemory;
+    const auto end = _pMemory + _capacity;
+    const auto target = static_cast<const uint8_t*>(ptr);
+
+    return target >= base && target < end;
     }
     
     inline auto ArenaAllocator::GetMemoryBlockPtr() const -> void*
