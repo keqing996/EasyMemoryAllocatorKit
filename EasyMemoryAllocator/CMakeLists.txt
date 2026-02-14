@@ -3,9 +3,9 @@ add_library                 (eallockit INTERFACE)
 target_include_directories  (eallockit INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 function(create_eallockit_test test_name source_file)
-    add_executable          (eallockit_edu_test_${test_name} ${source_file})
-    target_link_libraries   (eallockit_edu_test_${test_name} PUBLIC eallockit)
-    add_test                (NAME eallockit_edu_test_${test_name} COMMAND eallockit_edu_test_${test_name})
+    add_executable          (eallockit_test_${test_name} ${source_file})
+    target_link_libraries   (eallockit_test_${test_name} PUBLIC eallockit)
+    add_test                (NAME eallockit_test_${test_name} COMMAND eallockit_test_${test_name})
 endfunction()
 
 if (ENABLE_EALLOCKIT_TEST)
@@ -23,8 +23,8 @@ if (ENABLE_EALLOCKIT_TEST)
 endif ()
 
 function(create_eallockit_example example_name source_file)
-    add_executable          (eallockit_edu_example_${example_name} ${source_file})
-    target_link_libraries   (eallockit_edu_example_${example_name} PUBLIC eallockit)
+    add_executable          (eallockit_example_${example_name} ${source_file})
+    target_link_libraries   (eallockit_example_${example_name} PUBLIC eallockit)
 endfunction()
 
 if (ENABLE_EALLOCKIT_EXAMPLE)
