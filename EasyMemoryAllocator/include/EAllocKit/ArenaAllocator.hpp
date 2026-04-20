@@ -1,6 +1,9 @@
 #pragma once
 
+#include <cstdint>
 #include <cstddef>
+#include <cstdlib>
+#include <limits>
 #include <new>
 #include <stdexcept>
 #include <utility>
@@ -10,16 +13,34 @@ namespace EAllocKit
     class ArenaAllocator
     {
     public:
-        // Checkpoint represents a saved state of the arena
-        struct Checkpoint 
+        // Checkpoints are opaque rewind tokens bound to a specific allocator instance.
+        struct Checkpoint
         {
-            uint8_t* pSaved;
-            size_t remainingBytes;
-            
-            Checkpoint() : pSaved(nullptr), remainingBytes(0) {}
-            Checkpoint(uint8_t* ptr, size_t remaining) : pSaved(ptr), remainingBytes(remaining) {}
-            Checkpoint(void* ptr, size_t remaining) : pSaved(static_cast<uint8_t*>(ptr)), remainingBytes(remaining) {}
-            auto IsValid() const -> bool { return pSaved != nullptr; }
+            Checkpoint() noexcept
+                : _offset(0)
+                , _generation(0)
+                , _ownerTag(0)
+                , _signature(0)
+            {
+            }
+
+            auto IsValid() const -> bool { return _ownerTag != 0; }
+
+        private:
+            friend class ArenaAllocator;
+
+            Checkpoint(size_t offset, size_t generation, std::uintptr_t ownerTag, std::uintptr_t signature) noexcept
+                : _offset(offset)
+                , _generation(generation)
+                , _ownerTag(ownerTag)
+                , _signature(signature)
+            {
+            }
+
+            size_t _offset;
+            size_t _generation;
+            std::uintptr_t _ownerTag;
+            std::uintptr_t _signature;
         };
 
         // RAII scope guard for automatic checkpoint restoration
@@ -52,7 +73,7 @@ namespace EAllocKit
         };
         
     public:
-        explicit ArenaAllocator(size_t capacity, size_t defaultAlignment = 8);
+        explicit ArenaAllocator(size_t capacity, size_t defaultAlignment = alignof(std::max_align_t));
         ~ArenaAllocator();
         
         ArenaAllocator(const ArenaAllocator&) = delete;
@@ -61,13 +82,16 @@ namespace EAllocKit
     public:
         auto Allocate(size_t size) -> void*;
         auto Allocate(size_t size, size_t alignment) -> void*;
+        // ArenaAllocator never frees individual allocations; callers must manage
+        // object lifetimes themselves and use checkpoints or Reset() for bulk rewind.
         auto Deallocate(void* p) -> void;
 
         // Reset allocator
         auto Reset() -> void;
         
-        // Checkpoint/Restore interface
+        // SaveCheckpoint() creates an opaque token that can only rewind this arena.
         auto SaveCheckpoint() const -> Checkpoint;
+        // RestoreCheckpoint() is rewind-only; stale, foreign, or forward checkpoints are ignored.
         auto RestoreCheckpoint(const Checkpoint& checkpoint) -> void;
         auto CreateScope() -> ScopeGuard;
         
@@ -81,49 +105,112 @@ namespace EAllocKit
         
         // Statistics
         auto IsEmpty() const -> bool;
+        // True only when no positive-size allocation can succeed anymore.
         auto IsFull() const -> bool;
 
     private: // Util
-        static auto IsPowerOfTwo(size_t value) -> bool
+        static constexpr size_t kMinimumDefaultAlignment = alignof(std::max_align_t);
+        static constexpr std::uintptr_t kCheckpointSalt =
+            sizeof(std::uintptr_t) == 8
+                ? static_cast<std::uintptr_t>(0x9E3779B97F4A7C15ull)
+                : static_cast<std::uintptr_t>(0x9E3779B9u);
+        static constexpr std::uintptr_t kCheckpointMixConstant =
+            sizeof(std::uintptr_t) == 8
+                ? static_cast<std::uintptr_t>(0xBF58476D1CE4E5B9ull)
+                : static_cast<std::uintptr_t>(0x45D9F3Bu);
+
+        static_assert(
+            kMinimumDefaultAlignment > 0 &&
+            (kMinimumDefaultAlignment & (kMinimumDefaultAlignment - 1)) == 0,
+            "ArenaAllocator requires power-of-two max_align_t alignment");
+
+        static constexpr auto IsPowerOfTwo(size_t value) -> bool
         {
             return value > 0 && (value & (value - 1)) == 0;
         }
 
-        static auto UpAlignment(size_t size, size_t alignment) -> size_t
+        static auto AlignAddressUp(std::uintptr_t address, size_t alignment, std::uintptr_t& alignedAddress, size_t& paddingBytes) -> bool
         {
-            return (size + alignment - 1) & ~(alignment - 1);
+            const auto mask = static_cast<std::uintptr_t>(alignment - 1);
+            const auto remainder = address & mask;
+
+            paddingBytes = remainder == 0
+                ? 0
+                : static_cast<size_t>(alignment - remainder);
+
+            if (address > std::numeric_limits<std::uintptr_t>::max() - paddingBytes)
+                return false;
+
+            alignedAddress = address + paddingBytes;
+            return true;
         }
+
+        static auto MixBits(std::uintptr_t value) -> std::uintptr_t
+        {
+            value ^= value >> (std::numeric_limits<std::uintptr_t>::digits / 3);
+            value *= kCheckpointMixConstant;
+            value ^= value >> (std::numeric_limits<std::uintptr_t>::digits / 3);
+            value *= kCheckpointMixConstant;
+            value ^= value >> (std::numeric_limits<std::uintptr_t>::digits / 4);
+            return value;
+        }
+
+        auto GetCheckpointOwnerTag() const -> std::uintptr_t;
+        auto ComputeCheckpointSignature(size_t offset, size_t generation) const -> std::uintptr_t;
+        auto InvalidateCheckpoints() -> void;
+
+        auto TryGetOffset(const void* ptr, size_t& offset) const -> bool;
         
     private:
+        void* _pBackingStore;
         uint8_t* _pMemory;
         uint8_t* _pCurrent;
         size_t _capacity;
         size_t _defaultAlignment;
+        size_t _generation;
     };
 
     inline ArenaAllocator::ArenaAllocator(size_t capacity, size_t defaultAlignment)
-        : _pMemory(nullptr)
+        : _pBackingStore(nullptr)
+        , _pMemory(nullptr)
         , _pCurrent(nullptr)
         , _capacity(capacity)
-        , _defaultAlignment(defaultAlignment)
+        , _defaultAlignment(defaultAlignment < kMinimumDefaultAlignment ? kMinimumDefaultAlignment : defaultAlignment)
+        , _generation(1)
     {
         if (!IsPowerOfTwo(defaultAlignment))
             throw std::invalid_argument("Alignment must be a power of 2");
             
         if (capacity == 0)
             throw std::invalid_argument("ArenaAllocator capacity must be > 0");
-        
-        _pMemory = static_cast<uint8_t*>(::malloc(capacity));
-        if (!_pMemory)
+
+        const auto extraBytes = _defaultAlignment - 1;
+        if (_capacity > std::numeric_limits<size_t>::max() - extraBytes)
             throw std::bad_alloc();
-        
+
+        _pBackingStore = ::malloc(_capacity + extraBytes);
+        if (!_pBackingStore)
+            throw std::bad_alloc();
+
+        std::uintptr_t alignedBase = 0;
+        size_t ignoredPadding = 0;
+        if (!AlignAddressUp(reinterpret_cast<std::uintptr_t>(_pBackingStore), _defaultAlignment, alignedBase, ignoredPadding))
+        {
+            ::free(_pBackingStore);
+            _pBackingStore = nullptr;
+            throw std::bad_alloc();
+        }
+
+        _pMemory = reinterpret_cast<uint8_t*>(alignedBase);
         _pCurrent = _pMemory;
     }
     
     inline ArenaAllocator::~ArenaAllocator()
     {
-        ::free(_pMemory);
+        ::free(_pBackingStore);
+        _pBackingStore = nullptr;
         _pMemory = nullptr;
+        _pCurrent = nullptr;
     }
     
     inline auto ArenaAllocator::Allocate(size_t size) -> void*
@@ -139,18 +226,15 @@ namespace EAllocKit
         if (!IsPowerOfTwo(alignment))
             throw std::invalid_argument("Alignment must be a power of 2");
         
-        // Align current pointer to required alignment
-        size_t currentAddr = reinterpret_cast<size_t>(_pCurrent);
-        size_t alignedAddr = UpAlignment(currentAddr, alignment);
-        size_t paddingBytes = alignedAddr - currentAddr;
-        
-        // Calculate total size needed (padding + actual size)
-        size_t totalRequired = paddingBytes + size;
-        
-        if (GetRemainingBytes() < totalRequired)
+        std::uintptr_t alignedAddr = 0;
+        size_t paddingBytes = 0;
+        if (!AlignAddressUp(reinterpret_cast<std::uintptr_t>(_pCurrent), alignment, alignedAddr, paddingBytes))
             return nullptr;
 
-        // Update current pointer and return aligned address
+        const auto remainingBytes = GetRemainingBytes();
+        if (paddingBytes > remainingBytes || size > (remainingBytes - paddingBytes))
+            return nullptr;
+
         uint8_t* result = reinterpret_cast<uint8_t*>(alignedAddr);
         _pCurrent = result + size;
         
@@ -159,32 +243,40 @@ namespace EAllocKit
     
     inline auto ArenaAllocator::Deallocate(void* p) -> void
     {
-        // do nothing
+        (void)p;
     }
     
     inline auto ArenaAllocator::Reset() -> void
     {
         _pCurrent = _pMemory;
+        InvalidateCheckpoints();
     }
     
     inline auto ArenaAllocator::SaveCheckpoint() const -> Checkpoint
     {
-        return Checkpoint(_pCurrent, GetRemainingBytes());
+        const auto offset = GetUsedBytes();
+        return Checkpoint(offset, _generation, GetCheckpointOwnerTag(), ComputeCheckpointSignature(offset, _generation));
     }
     
     inline auto ArenaAllocator::RestoreCheckpoint(const Checkpoint& checkpoint) -> void
     {
         if (!checkpoint.IsValid())
             return;
-        
-        // Validate checkpoint is within our memory bounds
-        const auto base = _pMemory;
-        const auto end = _pMemory + _capacity;
-        
-        if (checkpoint.pSaved < base || checkpoint.pSaved > end)
+
+        const auto currentUsedBytes = GetUsedBytes();
+        if (checkpoint._ownerTag != GetCheckpointOwnerTag())
             return;
-        
-        _pCurrent = checkpoint.pSaved;
+
+        if (checkpoint._generation != _generation)
+            return;
+
+        if (checkpoint._signature != ComputeCheckpointSignature(checkpoint._offset, checkpoint._generation))
+            return;
+
+        if (checkpoint._offset > currentUsedBytes || checkpoint._offset > _capacity)
+            return;
+
+        _pCurrent = _pMemory + checkpoint._offset;
     }
     
     inline auto ArenaAllocator::CreateScope() -> ScopeGuard
@@ -209,14 +301,11 @@ namespace EAllocKit
     
     inline auto ArenaAllocator::ContainsPointer(const void* ptr) const -> bool
     {
-        if (!ptr) 
+        if (!ptr)
             return false;
-        
-    const auto base = _pMemory;
-    const auto end = _pMemory + _capacity;
-    const auto target = static_cast<const uint8_t*>(ptr);
 
-    return target >= base && target < end;
+        size_t offset = 0;
+        return TryGetOffset(ptr, offset) && offset < _capacity;
     }
     
     inline auto ArenaAllocator::GetMemoryBlockPtr() const -> void*
@@ -236,6 +325,50 @@ namespace EAllocKit
     
     inline auto ArenaAllocator::IsFull() const -> bool
     {
-        return GetRemainingBytes() < _defaultAlignment;
+        return GetRemainingBytes() == 0;
+    }
+
+    inline auto ArenaAllocator::GetCheckpointOwnerTag() const -> std::uintptr_t
+    {
+        const auto rawTag = MixBits(
+            reinterpret_cast<std::uintptr_t>(this) ^
+            reinterpret_cast<std::uintptr_t>(_pMemory) ^
+            static_cast<std::uintptr_t>(_capacity) ^
+            kCheckpointSalt);
+        return rawTag == 0 ? kCheckpointSalt : rawTag;
+    }
+
+    inline auto ArenaAllocator::ComputeCheckpointSignature(size_t offset, size_t generation) const -> std::uintptr_t
+    {
+        return MixBits(
+            GetCheckpointOwnerTag() ^
+            static_cast<std::uintptr_t>(offset) ^
+            (static_cast<std::uintptr_t>(generation) * kCheckpointMixConstant) ^
+            kCheckpointSalt);
+    }
+
+    inline auto ArenaAllocator::InvalidateCheckpoints() -> void
+    {
+        ++_generation;
+        if (_generation == 0)
+            _generation = 1;
+    }
+
+    inline auto ArenaAllocator::TryGetOffset(const void* ptr, size_t& offset) const -> bool
+    {
+        if (!ptr)
+            return false;
+
+        const auto baseAddress = reinterpret_cast<std::uintptr_t>(_pMemory);
+        const auto targetAddress = reinterpret_cast<std::uintptr_t>(ptr);
+        if (targetAddress < baseAddress)
+            return false;
+
+        const auto delta = targetAddress - baseAddress;
+        if (delta > _capacity)
+            return false;
+
+        offset = static_cast<size_t>(delta);
+        return true;
     }
 }

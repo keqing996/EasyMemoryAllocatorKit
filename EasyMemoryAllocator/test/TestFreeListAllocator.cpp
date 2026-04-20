@@ -1,810 +1,244 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
 
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <limits>
+#include <random>
 #include <vector>
-#include <stdexcept>
-#include <algorithm>
+
 #include "EAllocKit/FreeListAllocator.hpp"
 #include "Helper.h"
 
 using namespace EAllocKit;
 
-template<typename T, size_t alignment, size_t blockSize>
-void AllocateAndDelete()
+namespace
 {
-    FreeListAllocator allocator(blockSize, alignment);
-
-    size_t numberToAllocate = std::max(static_cast<size_t>(1), blockSize / (sizeof(T) + 32)); // Conservative estimate
-
-    // Allocate
-    std::vector<T*> dataVec;
-    for (size_t i = 0; i < numberToAllocate; i++)
+    struct alignas(std::max_align_t) MaxAlignedValue
     {
-        auto ptr = New<T>(allocator);
-        if (ptr == nullptr) {
-            // Can't allocate more, that's fine for this test
-            break;
-        }
+        std::uint8_t value[sizeof(std::max_align_t)];
+    };
 
-        dataVec.push_back(ptr);
+    struct AllocationRecord
+    {
+        void* ptr;
+        size_t size;
+        std::uint8_t pattern;
+    };
+
+    auto CheckPattern(const AllocationRecord& allocation) -> void
+    {
+        const auto* bytes = static_cast<const std::uint8_t*>(allocation.ptr);
+        for (size_t index = 0; index < allocation.size; ++index)
+        {
+            CHECK(bytes[index] == allocation.pattern);
+        }
     }
 
-    // Deallocate
-    for (size_t i = 0; i < dataVec.size(); i++)
-        Delete(allocator, dataVec[i]);
-
-    // Simple check - try to allocate again after deallocation
-    auto ptr = New<T>(allocator);
-    CHECK(ptr != nullptr); // Should be able to allocate again
-    Delete(allocator, ptr);
-}
-
-TEST_CASE("FreeListAllocator - Basic Allocation")
-{
-    AllocateAndDelete<uint32_t, 4, 128>();
-    AllocateAndDelete<uint32_t, 4, 4096>();
-    AllocateAndDelete<uint32_t, 8, 4096>();
-    AllocateAndDelete<Data64B, 8, 4096>();
-    AllocateAndDelete<Data128B, 8, 4096>();
-}
-
-TEST_CASE("FreeListAllocator - Fragmentation and Coalescing")
-{
-    SUBCASE("Free and reallocate same size")
+    auto FindExhaustionBoundary(size_t poolSize, size_t alignment) -> size_t
     {
-        FreeListAllocator allocator(4096, 8);
-        
-        // Allocate
-        auto* p1 = New<Data64B>(allocator);
-        auto* p2 = New<Data64B>(allocator);
-        auto* p3 = New<Data64B>(allocator);
-        
-        CHECK(p1 != nullptr);
-        CHECK(p2 != nullptr);
-        CHECK(p3 != nullptr);
-        
-        // Free middle block
-        Delete(allocator, p2);
-        
-        // Reallocate - should reuse freed block
-        auto* p4 = New<Data64B>(allocator);
-        CHECK(p4 == p2); // Should reuse same memory
-        
-        Delete(allocator, p1);
-        Delete(allocator, p4);
-        Delete(allocator, p3);
-    }
-    
-    SUBCASE("Coalesce adjacent free blocks")
-    {
-        FreeListAllocator allocator(4096, 8);
-        
-        auto* p1 = New<Data64B>(allocator);
-        auto* p2 = New<Data64B>(allocator);
-        auto* p3 = New<Data64B>(allocator);
-        
-        // Free all in order - should coalesce
-        Delete(allocator, p1);
-        Delete(allocator, p2);
-        Delete(allocator, p3);
-        
-        // Should be able to allocate larger block
-        auto* large = New<Data128B>(allocator);
-        CHECK(large != nullptr);
-        
-        Delete(allocator, large);
-    }
-    
-    SUBCASE("Fragmentation pattern")
-    {
-        FreeListAllocator allocator(8192, 8);
-        
-        std::vector<Data64B*> ptrs;
-        for (int i = 0; i < 50; i++)
+        for (size_t requestSize = 1; requestSize <= poolSize; ++requestSize)
         {
-            auto* p = New<Data64B>(allocator);
-            if (p) ptrs.push_back(p);
+            FreeListAllocator allocator(poolSize, alignment);
+            void* first = allocator.Allocate(requestSize, alignment);
+            if (first == nullptr)
+                return requestSize;
+
+            if (allocator.Allocate(1, 1) == nullptr)
+                return requestSize;
         }
-        
-        // Free every other block - create fragmentation
-        for (size_t i = 0; i < ptrs.size(); i += 2)
-        {
-            Delete(allocator, ptrs[i]);
-            ptrs[i] = nullptr;
-        }
-        
-        // Try to allocate in freed spaces
-        for (size_t i = 0; i < ptrs.size(); i += 2)
-        {
-            auto* p = New<Data64B>(allocator);
-            if (p) ptrs[i] = p;
-        }
-        
-        // Cleanup
-        for (auto* p : ptrs)
-        {
-            if (p) Delete(allocator, p);
-        }
+
+        return 0;
     }
 }
 
-TEST_CASE("FreeListAllocator - Variable Size Allocations")
+TEST_CASE("FreeListAllocator - default allocations stay safe for typed objects")
 {
-    SUBCASE("Mixed sizes")
+    FreeListAllocator allocator(1024, 1);
+
+    auto* value = New<MaxAlignedValue>(allocator);
+    REQUIRE(value != nullptr);
+    CHECK(reinterpret_cast<std::uintptr_t>(value) % alignof(std::max_align_t) == 0);
+
+    Delete(allocator, value);
+}
+
+TEST_CASE("FreeListAllocator - validates constructor and allocation alignment inputs")
+{
+    CHECK_THROWS_AS(FreeListAllocator(1024, 0), std::invalid_argument);
+    CHECK_THROWS_AS(FreeListAllocator(1024, 3), std::invalid_argument);
+
+    FreeListAllocator allocator(1024, 1);
+
+    auto* aligned32 = allocator.Allocate(48, 32);
+    REQUIRE(aligned32 != nullptr);
+    CHECK(reinterpret_cast<std::uintptr_t>(aligned32) % 32 == 0);
+    allocator.Deallocate(aligned32);
+
+    CHECK_THROWS_AS(allocator.Allocate(32, 0), std::invalid_argument);
+    CHECK_THROWS_AS(allocator.Allocate(32, 6), std::invalid_argument);
+}
+
+TEST_CASE("FreeListAllocator - normalizes undersized pools to a usable minimum")
+{
+    FreeListAllocator allocator(1, 1);
+
+    void* block = allocator.Allocate(1);
+    REQUIRE(block != nullptr);
+    CHECK(reinterpret_cast<std::uintptr_t>(block) % alignof(std::max_align_t) == 0);
+    CHECK(allocator.Allocate(1) == nullptr);
+
+    allocator.Deallocate(block);
+    CHECK(allocator.Allocate(1) == block);
+}
+
+TEST_CASE("FreeListAllocator - supports larger explicit alignments")
+{
+    FreeListAllocator allocator(64 * 1024, 16);
+
+    for (size_t alignment : std::array<size_t, 4>{64, 256, 1024, 4096})
     {
-        FreeListAllocator allocator(8192, 8);
-        
-        auto* small1 = New<uint32_t>(allocator);
-        auto* large1 = New<Data128B>(allocator);
-        auto* medium1 = New<Data64B>(allocator);
-        auto* small2 = New<uint64_t>(allocator);
-        
-        CHECK(small1 != nullptr);
-        CHECK(large1 != nullptr);
-        CHECK(medium1 != nullptr);
-        CHECK(small2 != nullptr);
-        
-        Delete(allocator, large1);
-        Delete(allocator, small1);
-        
-        // Allocate in freed space
-        auto* medium2 = New<Data64B>(allocator);
-        CHECK(medium2 != nullptr);
-        
-        Delete(allocator, medium1);
-        Delete(allocator, medium2);
-        Delete(allocator, small2);
-    }
-    
-    SUBCASE("Allocate larger than available")
-    {
-        FreeListAllocator allocator(256, 8);
-        
-        // Try to allocate more than available
-        auto* p = New<Data128B>(allocator);
-        CHECK(p != nullptr);
-        
-        // This should fail
-        auto* p2 = New<Data128B>(allocator);
-        CHECK(p2 == nullptr);
-        
-        Delete(allocator, p);
+        void* block = allocator.Allocate(37, alignment);
+        REQUIRE(block != nullptr);
+        CHECK(reinterpret_cast<std::uintptr_t>(block) % alignment == 0);
+        allocator.Deallocate(block);
     }
 }
 
-TEST_CASE("FreeListAllocator - Edge Cases")
+TEST_CASE("FreeListAllocator - rejects invalid and duplicate frees deterministically")
 {
-    SUBCASE("Zero size allocation")
+    FreeListAllocator allocator(1024, 8);
+
+    void* block = allocator.Allocate(32, 8);
+    REQUIRE(block != nullptr);
+    std::memset(block, 0xA5, 32);
+
+    allocator.Deallocate(block);
+    CHECK_THROWS_AS(allocator.Deallocate(block), std::invalid_argument);
+
+    void* other = allocator.Allocate(32, 8);
+    REQUIRE(other != nullptr);
+    std::memset(other, 0x11, 32);
+
+    auto* interior = static_cast<void*>(static_cast<std::uint8_t*>(other) + 1);
+    CHECK_THROWS_AS(allocator.Deallocate(interior), std::invalid_argument);
+    allocator.Deallocate(other);
+
+    std::uint8_t external[64] = {};
+    CHECK_THROWS_AS(allocator.Deallocate(external), std::invalid_argument);
+}
+
+TEST_CASE("FreeListAllocator - split boundaries stop exactly when remainder is no longer reusable")
+{
+    constexpr size_t poolSize = 512;
+    constexpr size_t alignment = 16;
+    const size_t boundaryRequest = FindExhaustionBoundary(poolSize, alignment);
+
+    REQUIRE(boundaryRequest > 1);
+
     {
-        FreeListAllocator allocator(1024, 8);
-        
-        // Zero size allocation - implementation defined behavior
-        auto* p = allocator.Allocate(0);
-        if (p != nullptr) {
-            allocator.Deallocate(p);
-        }
+        FreeListAllocator allocator(poolSize, alignment);
+        void* first = allocator.Allocate(boundaryRequest - 1, alignment);
+        REQUIRE(first != nullptr);
+        CHECK(allocator.Allocate(1, 1) != nullptr);
+        allocator.Deallocate(first);
     }
-    
-    SUBCASE("Very small allocations")
+
     {
-        FreeListAllocator allocator(1024, 8);
-        
-        // Allocate single bytes
-        std::vector<void*> ptrs;
-        for (int i = 0; i < 100; i++) {
-            auto* p = allocator.Allocate(1);
-            if (p) ptrs.push_back(p);
-        }
-        
-        // Verify all pointers are different and properly aligned
-        for (size_t i = 0; i < ptrs.size(); i++) {
-            CHECK(ptrs[i] != nullptr);
-            for (size_t j = i + 1; j < ptrs.size(); j++) {
-                CHECK(ptrs[i] != ptrs[j]);
-            }
-        }
-        
-        // Cleanup
-        for (auto* p : ptrs) {
-            allocator.Deallocate(p);
-        }
-    }
-    
-    SUBCASE("Double free detection")
-    {
-        FreeListAllocator allocator(1024, 8);
-        
-        auto* p = New<uint32_t>(allocator);
-        CHECK(p != nullptr);
-        
-        Delete(allocator, p);
-        
-        // Second free should be safe (though not recommended)
-        // The implementation should handle this gracefully
-        Delete(allocator, p);
-    }
-    
-    SUBCASE("Very small allocator")
-    {
-        FreeListAllocator allocator(64, 4);
-        
-        auto* p1 = New<uint32_t>(allocator);
-        CHECK(p1 != nullptr);
-        
-        auto* p2 = New<uint32_t>(allocator);
-        CHECK(p2 != nullptr);
-        
-        Delete(allocator, p1);
-        Delete(allocator, p2);
-    }
-    
-    SUBCASE("Allocate entire pool")
-    {
-        FreeListAllocator allocator(1024, 8);
-        
-        std::vector<uint32_t*> ptrs;
-        while (true)
-        {
-            auto* p = New<uint32_t>(allocator);
-            if (!p) break;
-            ptrs.push_back(p);
-        }
-        
-        CHECK(ptrs.size() > 0);
-        
-        // Free all
-        for (auto* p : ptrs)
-        {
-            Delete(allocator, p);
-        }
-        
-        // Should be able to allocate again
-        auto* p = New<uint32_t>(allocator);
-        CHECK(p != nullptr);
-        Delete(allocator, p);
-    }
-    
-    SUBCASE("Random allocation/deallocation pattern")
-    {
-        FreeListAllocator allocator(16384, 8);
-        std::vector<Data64B*> active;
-        
-        for (int i = 0; i < 100; i++)
-        {
-            if (i % 3 == 0 && !active.empty())
-            {
-                // Deallocate random element
-                size_t idx = i % active.size();
-                Delete(allocator, active[idx]);
-                active.erase(active.begin() + idx);
-            }
-            else
-            {
-                // Allocate
-                auto* p = New<Data64B>(allocator);
-                if (p) active.push_back(p);
-            }
-        }
-        
-        // Cleanup
-        for (auto* p : active)
-        {
-            Delete(allocator, p);
-        }
+        FreeListAllocator allocator(poolSize, alignment);
+        void* first = allocator.Allocate(boundaryRequest, alignment);
+        REQUIRE(first != nullptr);
+        CHECK(allocator.Allocate(1, 1) == nullptr);
+        allocator.Deallocate(first);
     }
 }
 
-TEST_CASE("FreeListAllocator - Alignment Tests")
+TEST_CASE("FreeListAllocator - pool exhaustion is followed by deterministic reuse")
 {
-    SUBCASE("Different alignments")
+    FreeListAllocator allocator(2048, 16);
+
+    std::vector<void*> firstPass;
+    while (void* block = allocator.Allocate(64, 16))
     {
-        // Test default alignment
-        {
-            FreeListAllocator allocator(1024, 4);
-            auto* p = allocator.Allocate(sizeof(uint32_t));
-            CHECK(p != nullptr);
-            CHECK(reinterpret_cast<size_t>(p) % 4 == 0);
-            allocator.Deallocate(p);
-        }
-        
-        // Test 8-byte alignment
-        {
-            FreeListAllocator allocator(1024, 8);
-            auto* p = allocator.Allocate(sizeof(uint64_t));
-            CHECK(p != nullptr);
-            CHECK(reinterpret_cast<size_t>(p) % 8 == 0);
-            allocator.Deallocate(p);
-        }
-        
-        // Test explicit 16-byte alignment
-        {
-            FreeListAllocator allocator(1024, 4);
-            auto* p = allocator.Allocate(sizeof(Data128B), 16);
-            CHECK(p != nullptr);
-            CHECK(reinterpret_cast<size_t>(p) % 16 == 0);
-            allocator.Deallocate(p);
-        }
-        
-        // 16-byte alignment default
-        {
-            FreeListAllocator allocator(2048, 16);
-            auto* p = allocator.Allocate(sizeof(Data128B));
-            CHECK(p != nullptr);
-            CHECK(reinterpret_cast<size_t>(p) % 16 == 0);
-            allocator.Deallocate(p);
-        }
-        
-        // 32-byte alignment
-        {
-            FreeListAllocator allocator(2048, 32);
-            auto* p = allocator.Allocate(sizeof(Data128B));
-            CHECK(p != nullptr);
-            CHECK(reinterpret_cast<size_t>(p) % 32 == 0);
-            allocator.Deallocate(p);
-        }
-        
-        // 64-byte alignment
-        {
-            FreeListAllocator allocator(4096, 64);
-            auto* p = allocator.Allocate(sizeof(Data128B));
-            CHECK(p != nullptr);
-            CHECK(reinterpret_cast<size_t>(p) % 64 == 0);
-            allocator.Deallocate(p);
-        }
-        
-        // 1-byte alignment (should work)
-        {
-            FreeListAllocator allocator(1024, 1);
-            auto* p = allocator.Allocate(sizeof(uint8_t));
-            CHECK(p != nullptr);
-            CHECK(reinterpret_cast<size_t>(p) % 1 == 0);
-            allocator.Deallocate(p);
-        }
-        
-        // 2-byte alignment
-        {
-            FreeListAllocator allocator(1024, 2);
-            auto* p = allocator.Allocate(sizeof(uint16_t));
-            CHECK(p != nullptr);
-            CHECK(reinterpret_cast<size_t>(p) % 2 == 0);
-            allocator.Deallocate(p);
-        }
-        
-        // 128-byte alignment (cache line)
-        {
-            FreeListAllocator allocator(8192, 128);
-            auto* p = allocator.Allocate(sizeof(Data128B));
-            CHECK(p != nullptr);
-            CHECK(reinterpret_cast<size_t>(p) % 128 == 0);
-            allocator.Deallocate(p);
-        }
-        
-        // 256-byte alignment
-        {
-            FreeListAllocator allocator(16384, 256);
-            auto* p = allocator.Allocate(sizeof(Data128B));
-            CHECK(p != nullptr);
-            CHECK(reinterpret_cast<size_t>(p) % 256 == 0);
-            allocator.Deallocate(p);
-        }
+        firstPass.push_back(block);
+    }
+
+    REQUIRE(firstPass.size() >= 2);
+    CHECK(allocator.Allocate(64, 16) == nullptr);
+
+    for (void* block : firstPass)
+    {
+        allocator.Deallocate(block);
+    }
+
+    for (void* expected : firstPass)
+    {
+        void* reused = allocator.Allocate(64, 16);
+        REQUIRE(reused != nullptr);
+        CHECK(reused == expected);
+    }
+
+    CHECK(allocator.Allocate(64, 16) == nullptr);
+}
+
+TEST_CASE("FreeListAllocator - boundary inputs do not overflow or misbehave")
+{
+    FreeListAllocator allocator(512, 8);
+
+    CHECK_THROWS_AS(FreeListAllocator(std::numeric_limits<size_t>::max(), 8), std::overflow_error);
+    CHECK(allocator.Allocate(0) == nullptr);
+    CHECK(allocator.Allocate(std::numeric_limits<size_t>::max()) == nullptr);
+    CHECK(allocator.Allocate(std::numeric_limits<size_t>::max() - 64, 64) == nullptr);
+
+    if constexpr (sizeof(size_t) > sizeof(std::uint32_t))
+    {
+        CHECK(allocator.Allocate(8, static_cast<size_t>(1) << 40) == nullptr);
     }
 }
 
-TEST_CASE("FreeListAllocator - Memory Layout and Distance Tests")
+TEST_CASE("FreeListAllocator - longer randomized sequences preserve reuse and coalescing")
 {
-    SUBCASE("Distance storage verification")
-    {
-        FreeListAllocator allocator(2048, 8);
-        
-        // Allocate with different alignments and verify distance storage
-        auto* p1 = allocator.Allocate(64, 16);  // 16-byte aligned
-        auto* p2 = allocator.Allocate(64, 32);  // 32-byte aligned
-        auto* p3 = allocator.Allocate(64, 64);  // 64-byte aligned
-        
-        CHECK(p1 != nullptr);
-        CHECK(p2 != nullptr);
-        CHECK(p3 != nullptr);
-        
-        // Verify alignments
-        CHECK(reinterpret_cast<size_t>(p1) % 16 == 0);
-        CHECK(reinterpret_cast<size_t>(p2) % 32 == 0);
-        CHECK(reinterpret_cast<size_t>(p3) % 64 == 0);
-        
-        // Deallocate in random order to test distance calculation
-        allocator.Deallocate(p2);
-        allocator.Deallocate(p1);
-        allocator.Deallocate(p3);
-    }
-    
-    SUBCASE("Minimum allocation space verification")
-    {
-        // Test with very small allocator size
-        FreeListAllocator allocator(64, 4);
-        
-        auto* p1 = allocator.Allocate(4);
-        CHECK(p1 != nullptr);
-        
-        auto* p2 = allocator.Allocate(4);
-        if (p2 != nullptr) {
-            allocator.Deallocate(p2);
-        }
-        
-        allocator.Deallocate(p1);
-    }
-    
-    SUBCASE("Maximum alignment test")
-    {
-        FreeListAllocator allocator(16384, 1024);
-        
-        auto* p = allocator.Allocate(128, 1024);
-        CHECK(p != nullptr);
-        CHECK(reinterpret_cast<size_t>(p) % 1024 == 0);
-        
-        allocator.Deallocate(p);
-    }
-}
+    FreeListAllocator allocator(8 * 1024, 16);
+    std::mt19937 random(0xC0FFEEu);
+    const std::array<size_t, 8> alignments{1, 2, 4, 8, 16, 32, 64, 128};
 
-TEST_CASE("FreeListAllocator - Stress Tests")
-{
-    SUBCASE("Massive allocation/deallocation cycles")
-    {
-        FreeListAllocator allocator(32768, 8);
-        
-        for (int cycle = 0; cycle < 10; cycle++) {
-            std::vector<void*> ptrs;
-            
-            // Allocate many blocks
-            for (int i = 0; i < 500; i++) {
-                size_t size = 8 + (i % 64);  // Variable sizes
-                auto* p = allocator.Allocate(size);
-                if (p) ptrs.push_back(p);
-            }
-            
-            // Free them all
-            for (auto* p : ptrs) {
-                allocator.Deallocate(p);
-            }
-        }
-    }
-    
-    SUBCASE("Alternating size pattern")
-    {
-        FreeListAllocator allocator(16384, 8);
-        std::vector<void*> small_ptrs, large_ptrs;
-        
-        // Allocate alternating small and large blocks
-        for (int i = 0; i < 50; i++) {
-            auto* small = allocator.Allocate(8);
-            auto* large = allocator.Allocate(128);
-            
-            if (small) small_ptrs.push_back(small);
-            if (large) large_ptrs.push_back(large);
-        }
-        
-        // Free all small blocks first
-        for (auto* p : small_ptrs) {
-            allocator.Deallocate(p);
-        }
-        
-        // Try to allocate medium blocks in the gaps
-        std::vector<void*> medium_ptrs;
-        for (int i = 0; i < 25; i++) {
-            auto* medium = allocator.Allocate(32);
-            if (medium) medium_ptrs.push_back(medium);
-        }
-        
-        // Cleanup
-        for (auto* p : large_ptrs) {
-            allocator.Deallocate(p);
-        }
-        for (auto* p : medium_ptrs) {
-            allocator.Deallocate(p);
-        }
-    }
-    
-    SUBCASE("Sequential coalescing test")
-    {
-        FreeListAllocator allocator(8192, 8);
-        std::vector<void*> ptrs;
-        
-        // Allocate many small blocks
-        for (int i = 0; i < 100; i++) {
-            auto* p = allocator.Allocate(32);
-            if (p) ptrs.push_back(p);
-        }
-        
-        // Free them in sequence (should trigger coalescing)
-        for (auto* p : ptrs) {
-            allocator.Deallocate(p);
-        }
-        
-        // Should now be able to allocate one large block
-        auto* large = allocator.Allocate(4096);
-        CHECK(large != nullptr);
-        allocator.Deallocate(large);
-    }
-}
+    std::vector<AllocationRecord> activeAllocations;
+    activeAllocations.reserve(128);
 
-TEST_CASE("FreeListAllocator - Alignment Corner Cases")
-{
-    SUBCASE("Power-of-2 alignments")
+    for (size_t step = 0; step < 1024; ++step)
     {
-        FreeListAllocator allocator(8192, 4);
-        
-        std::vector<std::pair<void*, size_t>> allocations;
-        
-        // Test various power-of-2 alignments
-        for (int shift = 0; shift <= 8; shift++) {
-            size_t alignment = 1 << shift;  // 1, 2, 4, 8, 16, 32, 64, 128, 256
-            
-            auto* p = allocator.Allocate(64, alignment);
-            if (p != nullptr) {
-                CHECK(reinterpret_cast<size_t>(p) % alignment == 0);
-                allocations.push_back({p, alignment});
-            }
-        }
-        
-        // Cleanup
-        for (auto& alloc : allocations) {
-            allocator.Deallocate(alloc.first);
-        }
-    }
-    
-    SUBCASE("Power-of-2 alignments only")
-    {
-        FreeListAllocator allocator(4096, 4);
-        
-        // Test power-of-2 alignments (the only ones supported by Util::UpAlignment)
-        std::vector<size_t> alignments = {1, 2, 4, 8, 16, 32, 64, 128};
-        
-        for (size_t alignment : alignments) {
-            auto* p = allocator.Allocate(32, alignment);
-            if (p != nullptr) {
-                CHECK(reinterpret_cast<size_t>(p) % alignment == 0);
-                allocator.Deallocate(p);
-            }
-        }
-    }
-    
-    SUBCASE("Alignment larger than allocation size")
-    {
-        FreeListAllocator allocator(2048, 4);
-        
-        // Allocate 4 bytes with 64-byte alignment
-        auto* p = allocator.Allocate(4, 64);
-        CHECK(p != nullptr);
-        CHECK(reinterpret_cast<size_t>(p) % 64 == 0);
-        
-        allocator.Deallocate(p);
-    }
-}
+        const bool shouldAllocate = activeAllocations.empty() || (random() % 100) < 65;
+        if (shouldAllocate)
+        {
+            const size_t size = 1 + (random() % 192);
+            const size_t alignment = alignments[random() % alignments.size()];
+            void* block = allocator.Allocate(size, alignment);
+            if (block == nullptr)
+                continue;
 
-TEST_CASE("FreeListAllocator - Boundary Conditions")
-{
-    SUBCASE("Zero size allocation")
-    {
-        FreeListAllocator allocator(1024, 8);
-        
-        // Zero size allocation - implementation defined behavior
-        auto* p = allocator.Allocate(0);
-        if (p != nullptr) {
-            allocator.Deallocate(p);
-        }
-    }
-    
-    SUBCASE("Very small allocations")
-    {
-        FreeListAllocator allocator(1024, 8);
-        
-        // Allocate single bytes
-        std::vector<void*> ptrs;
-        for (int i = 0; i < 100; i++) {
-            auto* p = allocator.Allocate(1);
-            if (p) ptrs.push_back(p);
-        }
-        
-        // Verify all pointers are different and properly aligned
-        for (size_t i = 0; i < ptrs.size(); i++) {
-            CHECK(ptrs[i] != nullptr);
-            for (size_t j = i + 1; j < ptrs.size(); j++) {
-                CHECK(ptrs[i] != ptrs[j]);
-            }
-        }
-        
-        // Cleanup
-        for (auto* p : ptrs) {
-            allocator.Deallocate(p);
-        }
-    }
-    
-    SUBCASE("Allocate exactly remaining space")
-    {
-        // Start with small allocator, allocate most of it, then allocate exactly what's left
-        FreeListAllocator allocator(256, 8);
-        
-        auto* p1 = allocator.Allocate(100);
-        CHECK(p1 != nullptr);
-        
-        // Try to allocate exactly the remaining space (accounting for headers and alignment)
-        // This is implementation-specific, but should handle gracefully
-        auto* p2 = allocator.Allocate(128);
-        if (p2 != nullptr) {
-            allocator.Deallocate(p2);
-        }
-        
-        allocator.Deallocate(p1);
-    }
-    
-    SUBCASE("Allocate more than total size")
-    {
-        FreeListAllocator allocator(1024, 8);
-        
-        // Try to allocate more than the total allocator size
-        auto* p = allocator.Allocate(2048);
-        CHECK(p == nullptr);
-    }
-    
-    SUBCASE("Null pointer deallocation")
-    {
-        FreeListAllocator allocator(1024, 8);
-        
-        // Deallocating null should be safe
-        allocator.Deallocate(nullptr);
-        
-        // Should still work normally after
-        auto* p = allocator.Allocate(64);
-        CHECK(p != nullptr);
-        allocator.Deallocate(p);
-    }
-    
-    SUBCASE("Allocator with 1-byte alignment")
-    {
-        FreeListAllocator allocator(1024, 1);
-        
-        // Should work with any allocation size
-        auto* p1 = allocator.Allocate(1);
-        auto* p2 = allocator.Allocate(7);
-        auto* p3 = allocator.Allocate(15);
-        
-        CHECK(p1 != nullptr);
-        CHECK(p2 != nullptr);
-        CHECK(p3 != nullptr);
-        
-        allocator.Deallocate(p1);
-        allocator.Deallocate(p2);
-        allocator.Deallocate(p3);
-    }
-}
+            CHECK(reinterpret_cast<std::uintptr_t>(block) % alignment == 0);
 
-TEST_CASE("FreeListAllocator - Memory Pattern Tests")
-{
-    SUBCASE("Fragmentation and defragmentation")
-    {
-        FreeListAllocator allocator(4096, 8);
-        std::vector<void*> ptrs;
-        
-        // Create checkered pattern of allocations
-        for (int i = 0; i < 32; i++) {
-            auto* p = allocator.Allocate(64);
-            if (p) ptrs.push_back(p);
+            const auto pattern = static_cast<std::uint8_t>(step & 0xFF);
+            std::memset(block, pattern, size);
+            activeAllocations.push_back(AllocationRecord{block, size, pattern});
+            continue;
         }
-        
-        // Free every other allocation to create fragmentation
-        for (size_t i = 1; i < ptrs.size(); i += 2) {
-            allocator.Deallocate(ptrs[i]);
-            ptrs[i] = nullptr;
-        }
-        
-        // Try to allocate larger blocks (should fail due to fragmentation)
-        auto* large = allocator.Allocate(128);
-        // May or may not succeed depending on implementation details
-        
-        // Free remaining allocations (should coalesce)
-        for (size_t i = 0; i < ptrs.size(); i += 2) {
-            if (ptrs[i]) allocator.Deallocate(ptrs[i]);
-        }
-        
-        if (large) allocator.Deallocate(large);
-        
-        // Now should be able to allocate large block
-        auto* large2 = allocator.Allocate(2048);
-        if (large2) {
-            CHECK(large2 != nullptr);
-            allocator.Deallocate(large2);
-        }
-    }
-    
-    SUBCASE("Reverse order deallocation")
-    {
-        FreeListAllocator allocator(2048, 8);
-        std::vector<void*> ptrs;
-        
-        // Allocate blocks in order
-        for (int i = 0; i < 20; i++) {
-            auto* p = allocator.Allocate(64);
-            if (p) ptrs.push_back(p);
-        }
-        
-        // Free in reverse order (tests backward coalescing)
-        for (int i = ptrs.size() - 1; i >= 0; i--) {
-            allocator.Deallocate(ptrs[i]);
-        }
-        
-        // Should be able to allocate one large block
-        auto* large = allocator.Allocate(1500);
-        CHECK(large != nullptr);
-        allocator.Deallocate(large);
-    }
-    
-    SUBCASE("Interleaved allocation sizes")
-    {
-        FreeListAllocator allocator(8192, 8);
-        std::vector<void*> small_ptrs, medium_ptrs, large_ptrs;
-        
-        // Allocate blocks of different sizes in interleaved pattern
-        for (int i = 0; i < 30; i++) {
-            auto* small = allocator.Allocate(16);
-            auto* medium = allocator.Allocate(64);
-            auto* large = allocator.Allocate(256);
-            
-            if (small) small_ptrs.push_back(small);
-            if (medium) medium_ptrs.push_back(medium);
-            if (large) large_ptrs.push_back(large);
-        }
-        
-        // Free in different orders to test coalescing in various scenarios
-        // Free large blocks first
-        for (auto* p : large_ptrs) {
-            allocator.Deallocate(p);
-        }
-        
-        // Free medium blocks
-        for (auto* p : medium_ptrs) {
-            allocator.Deallocate(p);
-        }
-        
-        // Free small blocks
-        for (auto* p : small_ptrs) {
-            allocator.Deallocate(p);
-        }
-    }
-}
 
-TEST_CASE("FreeListAllocator - Non-power-of-2 Alignment Exception")
-{
-    FreeListAllocator allocator(1024, 4);
-    
-    // Test that non-power-of-2 alignments throw exceptions
-    std::vector<size_t> badAlignments = {3, 6, 12, 24, 48, 96};
-    
-    for (size_t alignment : badAlignments) {
-        CHECK_THROWS_AS(allocator.Allocate(32, alignment), std::invalid_argument);
+        const size_t index = random() % activeAllocations.size();
+        CheckPattern(activeAllocations[index]);
+        allocator.Deallocate(activeAllocations[index].ptr);
+        activeAllocations.erase(activeAllocations.begin() + static_cast<std::ptrdiff_t>(index));
     }
-    
-    // Test that power-of-2 alignments still work
-    std::vector<size_t> goodAlignments = {1, 2, 4, 8, 16, 32, 64};
-    
-    for (size_t alignment : goodAlignments) {
-        void* p = allocator.Allocate(16, alignment);
-        CHECK(p != nullptr);
-        CHECK(reinterpret_cast<size_t>(p) % alignment == 0);
-        allocator.Deallocate(p);
-    }
-}
 
-TEST_CASE("FreeListAllocator - Constructor Non-power-of-2 Alignment Exception")
-{
-    // Test that non-power-of-2 default alignments throw exceptions in constructor
-    std::vector<size_t> badAlignments = {3, 6, 12, 24, 48, 96};
-    
-    for (size_t alignment : badAlignments) {
-        CHECK_THROWS_AS(FreeListAllocator(1024, alignment), std::invalid_argument);
+    for (const AllocationRecord& allocation : activeAllocations)
+    {
+        CheckPattern(allocation);
+        allocator.Deallocate(allocation.ptr);
     }
-    
-    // Test that power-of-2 default alignments work in constructor
-    std::vector<size_t> goodAlignments = {1, 2, 4, 8, 16, 32, 64};
-    
-    for (size_t alignment : goodAlignments) {
-        CHECK_NOTHROW(FreeListAllocator(1024, alignment));
-    }
+
+    void* largeBlock = allocator.Allocate(2048, 64);
+    REQUIRE(largeBlock != nullptr);
+    allocator.Deallocate(largeBlock);
 }

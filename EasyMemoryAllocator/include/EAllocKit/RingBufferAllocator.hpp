@@ -2,8 +2,9 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <cstdlib>
+#include <cstring>
+#include <limits>
 #include <new>
 #include <stdexcept>
 
@@ -13,211 +14,406 @@ namespace EAllocKit
     class RingBufferAllocator
     {
     private:
-        struct AllocationHeader
+        struct alignas(std::max_align_t) AllocationHeader
         {
-            size_t size;  // Size of allocation (including header)
+            size_t totalSize;
+            size_t payloadSize;
         };
-        
+
+        struct AllocationLayout
+        {
+            size_t payloadOffset;
+            size_t totalSize;
+        };
+
+        static constexpr size_t kHeaderAlignment = alignof(AllocationHeader);
+        static constexpr size_t kInvalidIndex = static_cast<size_t>(-1);
+
     public:
-        explicit RingBufferAllocator(size_t size, size_t defaultAlignment = 8);
+        explicit RingBufferAllocator(size_t size, size_t defaultAlignment = alignof(std::max_align_t));
         ~RingBufferAllocator();
-        
+
         RingBufferAllocator(const RingBufferAllocator& rhs) = delete;
         RingBufferAllocator(RingBufferAllocator&& rhs) = delete;
-        
+
     public:
         auto Allocate(size_t size) -> void*;
         auto Allocate(size_t size, size_t alignment) -> void*;
         auto DeallocateNext() -> void;        // Deallocate the next object in FIFO order
-        auto Consume(size_t size) -> void;    // Explicitly consume bytes
+        auto Consume(size_t size) -> void;    // Consume the next allocation if size matches its payload size
         auto Reset() -> void;                 // Reset both pointers
-        
+
         auto GetCapacity() const -> size_t { return _size; }
         auto GetUsedSpace() const -> size_t;
-        auto GetAvailableSpace() const -> size_t;
-        auto GetMemoryBlockPtr() const -> void* { return _pData; }
-        
+        auto GetAvailableSpace() const -> size_t;                  // Compatibility alias for total free space
+        auto GetTotalFreeSpace() const -> size_t;
+        auto GetLargestFreeContiguousSpace() const -> size_t;      // Raw contiguous bytes before header/alignment overhead
+        auto CanAllocate(size_t size) const -> bool;
+        auto CanAllocate(size_t size, size_t alignment) const -> bool;
+        auto GetMemoryBlockPtr() -> void* { return _pData; }
+        auto GetMemoryBlockPtr() const -> const void* { return _pData; }
+
     private: // Util functions
         static auto IsPowerOfTwo(size_t value) -> bool
         {
             return value > 0 && (value & (value - 1)) == 0;
         }
 
-        static auto UpAlignment(size_t size, size_t alignment) -> size_t
+        static auto TryAdd(size_t lhs, size_t rhs, size_t& result) -> bool
         {
-            return (size + alignment - 1) & ~(alignment - 1);
+            if (lhs > std::numeric_limits<size_t>::max() - rhs)
+                return false;
+
+            result = lhs + rhs;
+            return true;
+        }
+
+        static auto TryAlignUpSize(size_t value, size_t alignment, size_t& result) -> bool
+        {
+            if (!IsPowerOfTwo(alignment))
+                return false;
+
+            const size_t mask = alignment - 1;
+            if (value > std::numeric_limits<size_t>::max() - mask)
+                return false;
+
+            result = (value + mask) & ~mask;
+            return true;
+        }
+
+        static auto TryAlignUp(uintptr_t value, size_t alignment, uintptr_t& result) -> bool
+        {
+            if (!IsPowerOfTwo(alignment))
+                return false;
+
+            const uintptr_t mask = static_cast<uintptr_t>(alignment - 1);
+            if (value > std::numeric_limits<uintptr_t>::max() - mask)
+                return false;
+
+            result = (value + mask) & ~mask;
+            return true;
         }
 
         template <typename T>
-        static auto ToAddr(const T* p)
+        static auto ToAddr(const T* p) -> uintptr_t
         {
-            return reinterpret_cast<size_t>(p);
+            return reinterpret_cast<uintptr_t>(p);
         }
 
     private:
-        size_t GetAvailableContiguous() const;
-        
+        auto GetAvailableContiguous() const -> size_t;
+        auto IsEmpty() const -> bool;
+        auto NormalizeReadPointer() -> void;
+        auto TryComputeLayout(size_t start, size_t size, size_t alignment, AllocationLayout& layout) const -> bool;
+        auto ReadHeader(size_t index) const -> AllocationHeader;
+        auto WriteHeader(size_t index, const AllocationHeader& header) -> void;
+        auto ReadAndValidateNextHeader() -> AllocationHeader;
+        auto ConsumeRecord(const AllocationHeader& header) -> void;
+
     private:
-        uint8_t* _pData;       // Memory buffer
-        size_t _size;          // Total size
-        size_t _defaultAlignment;  // Default alignment
-        size_t _writePtr;      // Write position (producer)
-        size_t _readPtr;       // Read position (consumer)
-        bool _isFull;          // Flag to distinguish full from empty
+        uint8_t* _pData;
+        size_t _size;
+        size_t _defaultAlignment;
+        size_t _writePtr;
+        size_t _readPtr;
+        size_t _usedSize;
+        size_t _wrapBoundary;
     };
-    
+
     inline RingBufferAllocator::RingBufferAllocator(size_t size, size_t defaultAlignment)
         : _pData(nullptr)
         , _size(size)
-        , _defaultAlignment(defaultAlignment)
+        , _defaultAlignment(defaultAlignment < alignof(std::max_align_t) ? alignof(std::max_align_t) : defaultAlignment)
         , _writePtr(0)
         , _readPtr(0)
-        , _isFull(false)
+        , _usedSize(0)
+        , _wrapBoundary(kInvalidIndex)
     {
+        if (_size == 0)
+            throw std::invalid_argument("RingBufferAllocator size must be greater than 0");
+
         if (!IsPowerOfTwo(defaultAlignment))
             throw std::invalid_argument("RingBufferAllocator defaultAlignment must be a power of 2");
-            
-        // malloc typically provides alignment for max_align_t (usually 16 bytes)
+
         _pData = static_cast<uint8_t*>(::malloc(_size));
         if (!_pData)
             throw std::bad_alloc();
-        
+
         std::memset(_pData, 0, _size);
     }
-    
+
     inline RingBufferAllocator::~RingBufferAllocator()
     {
         if (_pData)
             ::free(_pData);
     }
-    
+
     inline auto RingBufferAllocator::Allocate(size_t size) -> void*
     {
         return Allocate(size, _defaultAlignment);
     }
-    
+
     inline auto RingBufferAllocator::Allocate(size_t size, size_t alignment) -> void*
     {
         if (size == 0)
             return nullptr;
-        
-        uint8_t* buffer = static_cast<uint8_t*>(_pData);
-        uintptr_t bufferAddr = ToAddr(buffer);
-        
-        // Calculate where the header will go
-        size_t headerPos = _writePtr;
-        uintptr_t dataPosAddr = bufferAddr + headerPos + sizeof(AllocationHeader);
-        
-        // Align the data position
-        uintptr_t alignedDataPosAddr = UpAlignment(dataPosAddr, alignment);
-        size_t alignedDataPos = static_cast<size_t>(alignedDataPosAddr - bufferAddr);
-        size_t alignmentPadding = alignedDataPos - (headerPos + sizeof(AllocationHeader));
-        
-        // Total size includes header, alignment padding, and data
-        size_t alignedSize = UpAlignment(size, _defaultAlignment);
-        size_t totalSize = sizeof(AllocationHeader) + alignmentPadding + alignedSize;
-        
-        // Check if we have enough space
-        if (totalSize > GetAvailableSpace())
+
+        if (!IsPowerOfTwo(alignment))
+            throw std::invalid_argument("RingBufferAllocator only supports power-of-2 alignments");
+
+        if (_usedSize == _size)
             return nullptr;
-        
-        // Check if we need to wrap around
-        size_t availableContiguous = GetAvailableContiguous();
-        
-        if (totalSize > availableContiguous && _writePtr >= _readPtr)
+
+        if (_writePtr == _size)
         {
-            // Not enough contiguous space, wrap around
-            // We need to ensure read pointer is not at 0
-            if (_readPtr == 0)
+            if (_wrapBoundary != kInvalidIndex)
                 return nullptr;
-            
-            // Wrap to beginning
+
+            _wrapBoundary = _size;
             _writePtr = 0;
-            headerPos = 0;
-            dataPosAddr = bufferAddr + sizeof(AllocationHeader);
-            alignedDataPosAddr = UpAlignment(dataPosAddr, alignment);
-            alignedDataPos = static_cast<size_t>(alignedDataPosAddr - bufferAddr);
-            alignmentPadding = alignedDataPos - sizeof(AllocationHeader);
-            totalSize = sizeof(AllocationHeader) + alignmentPadding + alignedSize;
-            
-            // Recheck space after wrap
-            if (totalSize > _readPtr)
-                return nullptr;
         }
-        
-        // Write allocation header
-        AllocationHeader* header = reinterpret_cast<AllocationHeader*>(buffer + headerPos);
-        header->size = totalSize;
-        
-        void* userPtr = buffer + alignedDataPos;
-        
-        // Advance write pointer
-        _writePtr = (headerPos + totalSize) % _size;
-        
-        // Check if buffer is now full
-        if (_writePtr == _readPtr)
-            _isFull = true;
-        
-        return userPtr;
+
+        AllocationLayout layout{};
+        if (!TryComputeLayout(_writePtr, size, alignment, layout))
+            return nullptr;
+
+        if (layout.totalSize > GetAvailableSpace())
+            return nullptr;
+
+        size_t start = _writePtr;
+        if (layout.totalSize > GetAvailableContiguous())
+        {
+            if (_wrapBoundary != kInvalidIndex || _readPtr == 0)
+                return nullptr;
+
+            if (!TryComputeLayout(0, size, alignment, layout))
+                return nullptr;
+
+            if (layout.totalSize > _readPtr)
+                return nullptr;
+
+            _wrapBoundary = _writePtr;
+            start = 0;
+        }
+
+        const AllocationHeader header{layout.totalSize, size};
+        WriteHeader(start, header);
+
+        _writePtr = start + layout.totalSize;
+        if (_writePtr == _size)
+        {
+            _writePtr = 0;
+            _wrapBoundary = _size;
+        }
+
+        _usedSize += layout.totalSize;
+        return _pData + start + layout.payloadOffset;
     }
-    
+
     inline auto RingBufferAllocator::DeallocateNext() -> void
     {
-        // Check if there's anything to deallocate
-        if (_readPtr == _writePtr && !_isFull)
-            return;  // Buffer is empty
-        
-        // Get the allocation header at read position
-        uint8_t* buffer = static_cast<uint8_t*>(_pData);
-        AllocationHeader* header = reinterpret_cast<AllocationHeader*>(buffer + _readPtr);
-        
-        // Advance read pointer to consume this allocation
-        Consume(header->size);
+        if (IsEmpty())
+            return;
+
+        ConsumeRecord(ReadAndValidateNextHeader());
     }
-    
+
     inline auto RingBufferAllocator::Consume(size_t size) -> void
     {
         if (size == 0)
             return;
-        
-        // Advance read pointer
-        _readPtr = (_readPtr + size) % _size;
-        
-        // Buffer is no longer full after consumption
-        _isFull = false;
+
+        if (IsEmpty())
+            throw std::underflow_error("RingBufferAllocator cannot consume from an empty buffer");
+
+        const AllocationHeader header = ReadAndValidateNextHeader();
+        if (header.payloadSize != size)
+            throw std::invalid_argument("RingBufferAllocator Consume size must match the next allocation payload size");
+
+        ConsumeRecord(header);
     }
-    
+
     inline auto RingBufferAllocator::Reset() -> void
     {
         _writePtr = 0;
         _readPtr = 0;
-        _isFull = false;
+        _usedSize = 0;
+        _wrapBoundary = kInvalidIndex;
     }
-    
+
     inline auto RingBufferAllocator::GetUsedSpace() const -> size_t
     {
-        if (_isFull)
-            return _size;
-        
-        if (_writePtr >= _readPtr)
-            return _writePtr - _readPtr;
-        else
-            return _size - _readPtr + _writePtr;
+        return _usedSize;
     }
-    
+
     inline auto RingBufferAllocator::GetAvailableSpace() const -> size_t
     {
-        return _size - GetUsedSpace();
+        return GetTotalFreeSpace();
     }
-    
+
+    inline auto RingBufferAllocator::GetTotalFreeSpace() const -> size_t
+    {
+        return _size - _usedSize;
+    }
+
+    inline auto RingBufferAllocator::GetLargestFreeContiguousSpace() const -> size_t
+    {
+        const size_t contiguous = GetAvailableContiguous();
+        if (_usedSize == _size || _wrapBoundary != kInvalidIndex || _writePtr < _readPtr)
+            return contiguous;
+
+        return contiguous > _readPtr ? contiguous : _readPtr;
+    }
+
+    inline auto RingBufferAllocator::CanAllocate(size_t size) const -> bool
+    {
+        return CanAllocate(size, _defaultAlignment);
+    }
+
+    inline auto RingBufferAllocator::CanAllocate(size_t size, size_t alignment) const -> bool
+    {
+        if (size == 0)
+            return false;
+
+        if (!IsPowerOfTwo(alignment))
+            throw std::invalid_argument("RingBufferAllocator only supports power-of-2 alignments");
+
+        if (_usedSize == _size)
+            return false;
+
+        AllocationLayout layout{};
+        if (!TryComputeLayout(_writePtr, size, alignment, layout))
+            return false;
+
+        if (layout.totalSize <= GetAvailableContiguous())
+            return layout.totalSize <= GetTotalFreeSpace();
+
+        if (_wrapBoundary != kInvalidIndex || _readPtr == 0)
+            return false;
+
+        if (!TryComputeLayout(0, size, alignment, layout))
+            return false;
+
+        return layout.totalSize <= _readPtr && layout.totalSize <= GetTotalFreeSpace();
+    }
+
     inline auto RingBufferAllocator::GetAvailableContiguous() const -> size_t
     {
-        if (_isFull)
+        if (_usedSize == _size)
             return 0;
-        
+
+        if (_wrapBoundary != kInvalidIndex)
+            return _readPtr - _writePtr;
+
         if (_writePtr >= _readPtr)
             return _size - _writePtr;
-        else
-            return _readPtr - _writePtr;
+
+        return _readPtr - _writePtr;
+    }
+
+    inline auto RingBufferAllocator::IsEmpty() const -> bool
+    {
+        return _usedSize == 0;
+    }
+
+    inline auto RingBufferAllocator::NormalizeReadPointer() -> void
+    {
+        if (_wrapBoundary != kInvalidIndex && _readPtr == _wrapBoundary)
+        {
+            _readPtr = 0;
+            _wrapBoundary = kInvalidIndex;
+        }
+    }
+
+    inline auto RingBufferAllocator::TryComputeLayout(size_t start, size_t size, size_t alignment, AllocationLayout& layout) const -> bool
+    {
+        if (start > _size)
+            return false;
+
+        const uintptr_t baseAddress = ToAddr(_pData);
+        const uintptr_t startOffset = static_cast<uintptr_t>(start);
+        if (startOffset > std::numeric_limits<uintptr_t>::max() - baseAddress)
+            return false;
+        const uintptr_t startAddress = baseAddress + startOffset;
+
+        const uintptr_t headerSize = static_cast<uintptr_t>(sizeof(AllocationHeader));
+        if (headerSize > std::numeric_limits<uintptr_t>::max() - startAddress)
+            return false;
+        const uintptr_t payloadAddress = startAddress + headerSize;
+
+        uintptr_t alignedPayloadAddress = 0;
+        if (!TryAlignUp(payloadAddress, alignment, alignedPayloadAddress))
+            return false;
+
+        if (alignedPayloadAddress < startAddress)
+            return false;
+
+        const uintptr_t payloadOffsetValue = alignedPayloadAddress - startAddress;
+        if (payloadOffsetValue > std::numeric_limits<size_t>::max())
+            return false;
+
+        const size_t payloadOffset = static_cast<size_t>(payloadOffsetValue);
+        if (payloadOffset < sizeof(AllocationHeader))
+            return false;
+
+        size_t totalSize = 0;
+        if (!TryAdd(payloadOffset, size, totalSize))
+            return false;
+
+        if (!TryAlignUpSize(totalSize, kHeaderAlignment, totalSize))
+            return false;
+
+        layout.payloadOffset = payloadOffset;
+        layout.totalSize = totalSize;
+        return true;
+    }
+
+    inline auto RingBufferAllocator::ReadHeader(size_t index) const -> AllocationHeader
+    {
+        AllocationHeader header{};
+        std::memcpy(&header, _pData + index, sizeof(header));
+        return header;
+    }
+
+    inline auto RingBufferAllocator::WriteHeader(size_t index, const AllocationHeader& header) -> void
+    {
+        std::memcpy(_pData + index, &header, sizeof(header));
+    }
+
+    inline auto RingBufferAllocator::ReadAndValidateNextHeader() -> AllocationHeader
+    {
+        NormalizeReadPointer();
+
+        const AllocationHeader header = ReadHeader(_readPtr);
+        if (header.payloadSize == 0)
+            throw std::runtime_error("RingBufferAllocator encountered a corrupt allocation header");
+
+        if ((header.totalSize % kHeaderAlignment) != 0)
+            throw std::runtime_error("RingBufferAllocator encountered a misaligned allocation header");
+
+        if (header.totalSize < sizeof(AllocationHeader) || header.totalSize > _usedSize)
+            throw std::runtime_error("RingBufferAllocator encountered an invalid allocation header size");
+
+        if (header.payloadSize > header.totalSize - sizeof(AllocationHeader))
+            throw std::runtime_error("RingBufferAllocator encountered an invalid allocation payload size");
+
+        if (_wrapBoundary != kInvalidIndex && _readPtr < _wrapBoundary && header.totalSize > _wrapBoundary - _readPtr)
+            throw std::runtime_error("RingBufferAllocator encountered an allocation spanning a wrap boundary");
+
+        return header;
+    }
+
+    inline auto RingBufferAllocator::ConsumeRecord(const AllocationHeader& header) -> void
+    {
+        _readPtr += header.totalSize;
+        _usedSize -= header.totalSize;
+
+        if (_usedSize == 0)
+        {
+            Reset();
+            return;
+        }
+
+        NormalizeReadPointer();
     }
 }

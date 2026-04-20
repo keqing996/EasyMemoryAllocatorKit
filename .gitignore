@@ -4,6 +4,8 @@
 .cache/
 .vscode/
 
+.DS_Store
+
 # CMake generated files
 CMakeFiles/
 CMakeCache.txt

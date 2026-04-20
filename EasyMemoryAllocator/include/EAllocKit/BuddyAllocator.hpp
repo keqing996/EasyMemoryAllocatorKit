@@ -4,402 +4,388 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
+#include <limits>
+#include <memory>
 #include <new>
 #include <stdexcept>
+
+#if !defined(__cpp_aligned_new) || (__cpp_aligned_new < 201606L)
+#error "BuddyAllocator requires C++17 aligned operator new/delete support"
+#endif
 
 namespace EAllocKit
 {
     class BuddyAllocator
     {
     private:
-        static constexpr size_t MIN_BLOCK_SIZE = 32;  // Minimum allocation size
-        static constexpr size_t MAX_ORDER = 32;       // Maximum number of size classes
+        static constexpr size_t MIN_BLOCK_SIZE = 32;
+        static constexpr size_t MAX_ORDER = 32;
 
         struct FreeBlock
         {
             FreeBlock* next;
         };
-        
+
+        static_assert(MAX_ORDER <= std::numeric_limits<uint8_t>::max(),
+                      "BuddyAllocator metadata order storage must fit in uint8_t");
+        static_assert(MIN_BLOCK_SIZE >= sizeof(FreeBlock),
+                      "BuddyAllocator minimum block size must hold a freelist node");
+        static_assert((MIN_BLOCK_SIZE % alignof(FreeBlock)) == 0,
+                      "BuddyAllocator minimum block size must preserve freelist alignment");
+
+        enum class BlockState : uint8_t
+        {
+            Interior,
+            FreeHead,
+            UsedHead,
+        };
+
+        struct BlockMeta
+        {
+            uint8_t order = 0;
+            BlockState state = BlockState::Interior;
+        };
+
     public:
-        explicit BuddyAllocator(size_t size, size_t defaultAlignment = 8);
+        explicit BuddyAllocator(size_t size, size_t defaultAlignment = alignof(std::max_align_t));
         ~BuddyAllocator();
-        
+
         BuddyAllocator(const BuddyAllocator& rhs) = delete;
         BuddyAllocator(BuddyAllocator&& rhs) = delete;
-        
+
     public:
         auto Allocate(size_t size) -> void*;
         auto Allocate(size_t size, size_t alignment) -> void*;
         auto Deallocate(void* ptr) -> void;
         auto GetMemoryBlockPtr() const -> void* { return _pData; }
         auto GetTotalSize() const -> size_t { return _size; }
-        
+
     private:
         auto GetOrderFromSize(size_t size) const -> size_t;
         auto GetSizeFromOrder(size_t order) const -> size_t;
-        auto GetBuddy(void* block, size_t order) -> void*;
-        auto GetBlockIndex(void* block) const -> size_t;
+        auto GetBlockIndex(const void* block) const -> size_t;
         auto GetBlockFromIndex(size_t index) const -> void*;
-        auto IsBlockFree(size_t index, size_t order) const -> bool;
-        auto MarkBlockUsed(size_t index, size_t order) -> void;
-        auto MarkBlockFree(size_t index, size_t order) -> void;
-        auto SplitBlock(size_t order) -> void;
+        auto GetBuddyIndex(size_t index, size_t order) const -> size_t;
+        static auto ConstructFreeBlock(void* storage, FreeBlock* next) -> FreeBlock*;
+        static auto DestroyFreeBlock(FreeBlock* block) -> void;
+        auto RemoveFreeBlock(size_t order, void* ptr) -> bool;
+        auto PushFreeBlock(size_t order, void* ptr) -> void;
+        auto SetBlockState(size_t index, size_t order, BlockState headState) -> void;
+        auto SplitToOrder(size_t order) -> bool;
         auto AllocateBlock(size_t order) -> void*;
-        auto DeallocateBlock(void* ptr, size_t order) -> void;
-        
-    private: // Util functions
-        static auto IsPowerOfTwo(size_t value) -> bool
+        auto DeallocateBlock(size_t index, size_t order) -> void;
+
+    private:
+        static constexpr auto IsPowerOfTwo(size_t value) -> bool
         {
             return value > 0 && (value & (value - 1)) == 0;
         }
 
-        static auto RoundUpToPowerOf2(size_t size) -> size_t
+        static constexpr auto MinimumSafeAlignment() -> size_t
         {
-            if (size == 0)
-                return 1;
+            size_t alignment = alignof(std::max_align_t);
+            size_t rounded = 1;
 
-            size--;
-            size |= size >> 1;
-            size |= size >> 2;
-            size |= size >> 4;
-            size |= size >> 8;
-            size |= size >> 16;
+            while (rounded < alignment)
+                rounded <<= 1;
 
-            if constexpr (sizeof(size_t) > 4)
-                size |= size >> 32;
-
-            size++;
-
-            return size;
+            return rounded;
         }
-        
-        static auto Log2(size_t value) -> size_t
+
+        static auto RoundUpToPowerOf2(size_t value, size_t& rounded) -> bool
         {
-            size_t result = 0;
-            while (value >>= 1)
-                result++;
-            return result;
+            if (value <= 1)
+            {
+                rounded = 1;
+                return true;
+            }
+
+            value--;
+
+            for (size_t shift = 1; shift < sizeof(size_t) * 8; shift <<= 1)
+                value |= value >> shift;
+
+            if (value == std::numeric_limits<size_t>::max())
+                return false;
+
+            rounded = value + 1;
+            return true;
         }
 
     private:
-        uint8_t* _pData;                   // Memory pool
-        size_t _size;                      // Total size (power of 2)
-        size_t _maxOrder;                  // Maximum order based on size
-        size_t _defaultAlignment;          // Default alignment
-        std::array<FreeBlock*, MAX_ORDER> _freeLists{};  // Free lists for each order
-        uint8_t* _blockStatus;             // Bitmap for block allocation status
-        size_t _bitmapSize;                // Size of bitmap in bytes
+        uint8_t* _pData;
+        size_t _size;
+        size_t _maxOrder;
+        size_t _defaultAlignment;
+        size_t _arenaAlignment;
+        size_t _minBlockCount;
+        std::array<FreeBlock*, MAX_ORDER> _freeLists{};
+        std::unique_ptr<BlockMeta[]> _blockMeta;
     };
 
     inline BuddyAllocator::BuddyAllocator(size_t size, size_t defaultAlignment)
         : _pData(nullptr)
         , _size(0)
         , _maxOrder(0)
-        , _defaultAlignment(defaultAlignment)
-        , _blockStatus(nullptr)
-        , _bitmapSize(0)
+        , _defaultAlignment(0)
+        , _arenaAlignment(0)
+        , _minBlockCount(0)
     {
         if (!IsPowerOfTwo(defaultAlignment))
             throw std::invalid_argument("BuddyAllocator defaultAlignment must be a power of 2");
-            
-        // Round size down to power of 2
-        _size = RoundUpToPowerOf2(size);
-        if (_size < MIN_BLOCK_SIZE)
-            _size = MIN_BLOCK_SIZE;
-        
-        // Calculate max order
-        _maxOrder = Log2(_size / MIN_BLOCK_SIZE) + 1;
-        if (_maxOrder > MAX_ORDER)
-            _maxOrder = MAX_ORDER;
-        
-        // Initialize free lists
+
+        const size_t minimumAlignment = MinimumSafeAlignment();
+        _defaultAlignment = std::max(defaultAlignment, minimumAlignment);
+
+        size_t roundedSize = 0;
+        if (!RoundUpToPowerOf2(size, roundedSize))
+            throw std::length_error("BuddyAllocator size exceeds supported range");
+
+        _size = std::max(roundedSize, MIN_BLOCK_SIZE);
+        _size = std::max(_size, _defaultAlignment);
+
+        if (_size / MIN_BLOCK_SIZE > std::numeric_limits<size_t>::max() / sizeof(BlockMeta))
+            throw std::length_error("BuddyAllocator size exceeds supported range");
+
+        size_t blockSize = MIN_BLOCK_SIZE;
+        _maxOrder = 1;
+
+        while (blockSize < _size)
+        {
+            if (_maxOrder >= MAX_ORDER || blockSize > (std::numeric_limits<size_t>::max() / 2))
+                throw std::length_error("BuddyAllocator size exceeds supported range");
+
+            blockSize <<= 1;
+            ++_maxOrder;
+        }
+
+        _arenaAlignment = _size;
+        _minBlockCount = _size / MIN_BLOCK_SIZE;
         _freeLists.fill(nullptr);
-        
-        // Calculate bitmap size (one bit per minimum-sized block)
-        size_t numMinBlocks = _size / MIN_BLOCK_SIZE;
-        _bitmapSize = (numMinBlocks + 7) / 8;
-        
-        // Allocate memory pool and bitmap
-        size_t totalSize = _size + _bitmapSize;
-        void* memory = ::malloc(totalSize);
-        if (!memory)
-            throw std::bad_alloc();
-        
-        _pData = static_cast<uint8_t*>(memory);
-        _blockStatus = static_cast<uint8_t*>(memory) + _size;
-        std::memset(_blockStatus, 0, _bitmapSize);
-        
-        // Add the entire memory pool as one free block at max order
-        FreeBlock* initialBlock = reinterpret_cast<FreeBlock*>(_pData);
-        initialBlock->next = nullptr;
+
+        // Buddy blocks are always power-of-two sized/aligned, so the arena must
+        // itself be aligned to the rounded arena size. This relies on the
+        // implementation honoring C++17 aligned operator new/delete requests.
+        void* arena = ::operator new(_size, std::align_val_t(_arenaAlignment));
+
+        try
+        {
+            _blockMeta = std::make_unique<BlockMeta[]>(_minBlockCount);
+        }
+        catch (...)
+        {
+            ::operator delete(arena, std::align_val_t(_arenaAlignment));
+            throw;
+        }
+
+        _pData = static_cast<uint8_t*>(arena);
+        std::fill_n(_blockMeta.get(), _minBlockCount, BlockMeta{});
+        SetBlockState(0, _maxOrder - 1, BlockState::FreeHead);
+        auto* initialBlock = ConstructFreeBlock(_pData, nullptr);
         _freeLists[_maxOrder - 1] = initialBlock;
     }
-    
+
     inline BuddyAllocator::~BuddyAllocator()
     {
         if (_pData)
-            ::free(_pData);
+            ::operator delete(_pData, std::align_val_t(_arenaAlignment));
     }
-    
+
     inline auto BuddyAllocator::Allocate(size_t size) -> void*
     {
         return Allocate(size, _defaultAlignment);
     }
-    
+
     inline auto BuddyAllocator::Allocate(size_t size, size_t alignment) -> void*
     {
         if (size == 0)
             return nullptr;
-            
+
         if (!IsPowerOfTwo(alignment))
             throw std::invalid_argument("BuddyAllocator only supports power-of-2 alignments");
-        
-        // Check for size overflow - if size is too large, return nullptr
-        if (size > _size)
-            return nullptr;
 
         alignment = std::max(alignment, _defaultAlignment);
-
-        size_t blockSize = RoundUpToPowerOf2(size);
-        if (blockSize == 0 || blockSize < size)
+        if (alignment > _size)
             return nullptr;
 
-        if (blockSize < MIN_BLOCK_SIZE)
-            blockSize = MIN_BLOCK_SIZE;
-
-        if (blockSize < alignment)
-            blockSize = RoundUpToPowerOf2(alignment);
-
-        if (blockSize == 0 || blockSize < alignment)
+        size_t roundedSize = 0;
+        if (!RoundUpToPowerOf2(size, roundedSize))
             return nullptr;
 
-        size_t order = GetOrderFromSize(blockSize);
-        if (order >= _maxOrder)
+        size_t blockSize = std::max(roundedSize, MIN_BLOCK_SIZE);
+        blockSize = std::max(blockSize, alignment);
+
+        if (blockSize > _size)
             return nullptr;
 
-        return AllocateBlock(order);
+        return AllocateBlock(GetOrderFromSize(blockSize));
     }
-    
+
     inline auto BuddyAllocator::Deallocate(void* ptr) -> void
     {
-        if (!ptr)
+        if (!ptr || !_pData)
             return;
 
-        uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
-        uintptr_t base = reinterpret_cast<uintptr_t>(_pData);
-
-        if (addr < base || addr >= base + _size)
+        const uintptr_t address = reinterpret_cast<uintptr_t>(ptr);
+        const uintptr_t base = reinterpret_cast<uintptr_t>(_pData);
+        if (address < base)
             return;
 
-        size_t index = GetBlockIndex(ptr);
-
-        for (size_t order = _maxOrder; order-- > 0;)
-        {
-            size_t blockSize = GetSizeFromOrder(order);
-            if ((addr - base) % blockSize != 0)
-                continue;
-
-            size_t blocksPerAllocation = blockSize / MIN_BLOCK_SIZE;
-            size_t blockIndex = index / blocksPerAllocation;
-            size_t firstMinIndex = blockIndex * blocksPerAllocation;
-
-            if (IsBlockFree(firstMinIndex, order))
-                continue;
-
-            DeallocateBlock(ptr, order);
+        const size_t offset = static_cast<size_t>(address - base);
+        if (offset >= _size || (offset % MIN_BLOCK_SIZE) != 0)
             return;
-        }
+
+        const size_t index = offset / MIN_BLOCK_SIZE;
+        if (_blockMeta[index].state != BlockState::UsedHead)
+            return;
+
+        DeallocateBlock(index, _blockMeta[index].order);
     }
-    
+
     inline auto BuddyAllocator::GetOrderFromSize(size_t size) const -> size_t
     {
-        return Log2(size / MIN_BLOCK_SIZE);
+        size_t order = 0;
+        size_t blockSize = MIN_BLOCK_SIZE;
+
+        while (blockSize < size)
+        {
+            blockSize <<= 1;
+            ++order;
+        }
+
+        return order;
     }
-    
+
     inline auto BuddyAllocator::GetSizeFromOrder(size_t order) const -> size_t
     {
         return MIN_BLOCK_SIZE << order;
     }
-    
-    inline auto BuddyAllocator::GetBuddy(void* block, size_t order) -> void*
+
+    inline auto BuddyAllocator::GetBlockIndex(const void* block) const -> size_t
     {
-        uintptr_t addr = reinterpret_cast<uintptr_t>(block);
-        uintptr_t base = reinterpret_cast<uintptr_t>(_pData);
-        size_t blockSize = GetSizeFromOrder(order);
-        
-        // XOR with block size to get buddy address
-        uintptr_t offset = addr - base;
-        uintptr_t buddyOffset = offset ^ blockSize;
-        
-        return reinterpret_cast<void*>(base + buddyOffset);
+        const uintptr_t address = reinterpret_cast<uintptr_t>(block);
+        const uintptr_t base = reinterpret_cast<uintptr_t>(_pData);
+        return static_cast<size_t>((address - base) / MIN_BLOCK_SIZE);
     }
-    
-    inline auto BuddyAllocator::GetBlockIndex(void* block) const -> size_t
-    {
-        uintptr_t addr = reinterpret_cast<uintptr_t>(block);
-        uintptr_t base = reinterpret_cast<uintptr_t>(_pData);
-        return (addr - base) / MIN_BLOCK_SIZE;
-    }
-    
+
     inline auto BuddyAllocator::GetBlockFromIndex(size_t index) const -> void*
     {
-        return static_cast<uint8_t*>(_pData) + (index * MIN_BLOCK_SIZE);
+        return _pData + (index * MIN_BLOCK_SIZE);
     }
-    
-    inline auto BuddyAllocator::IsBlockFree(size_t index, size_t order) const -> bool
+
+    inline auto BuddyAllocator::GetBuddyIndex(size_t index, size_t order) const -> size_t
     {
-        size_t byteIndex = index / 8;
-        size_t bitIndex = index % 8;
-        
-        if (byteIndex >= _bitmapSize)
-            return false;
-        
-        return (_blockStatus[byteIndex] & (1 << bitIndex)) == 0;
+        return index ^ (size_t(1) << order);
     }
-    
-    inline auto BuddyAllocator::MarkBlockUsed(size_t index, size_t order) -> void
+
+    inline auto BuddyAllocator::ConstructFreeBlock(void* storage, FreeBlock* next) -> FreeBlock*
     {
-        size_t blockSize = GetSizeFromOrder(order);
-        size_t numMinBlocks = blockSize / MIN_BLOCK_SIZE;
-        
-        for (size_t i = 0; i < numMinBlocks; ++i)
+        return std::launder(::new (storage) FreeBlock{next});
+    }
+
+    inline auto BuddyAllocator::DestroyFreeBlock(FreeBlock* block) -> void
+    {
+        std::destroy_at(block);
+    }
+
+    inline auto BuddyAllocator::RemoveFreeBlock(size_t order, void* ptr) -> bool
+    {
+        FreeBlock** current = &_freeLists[order];
+
+        while (*current)
         {
-            size_t idx = index + i;
-            size_t byteIndex = idx / 8;
-            size_t bitIndex = idx % 8;
-            
-            if (byteIndex < _bitmapSize)
-                _blockStatus[byteIndex] |= (1 << bitIndex);
+            FreeBlock* block = *current;
+            if (block == ptr)
+            {
+                *current = block->next;
+                DestroyFreeBlock(block);
+                return true;
+            }
+
+            current = &(block->next);
         }
+
+        return false;
     }
-    
-    inline auto BuddyAllocator::MarkBlockFree(size_t index, size_t order) -> void
+
+    inline auto BuddyAllocator::PushFreeBlock(size_t order, void* ptr) -> void
     {
-        size_t blockSize = GetSizeFromOrder(order);
-        size_t numMinBlocks = blockSize / MIN_BLOCK_SIZE;
-        
-        for (size_t i = 0; i < numMinBlocks; ++i)
-        {
-            size_t idx = index + i;
-            size_t byteIndex = idx / 8;
-            size_t bitIndex = idx % 8;
-            
-            if (byteIndex < _bitmapSize)
-                _blockStatus[byteIndex] &= ~(1 << bitIndex);
-        }
-    }
-    
-    inline auto BuddyAllocator::SplitBlock(size_t order) -> void
-    {
-        if (order >= _maxOrder - 1)
-            return;
-        
-        // Get a block from higher order
-        if (!_freeLists[order + 1])
-        {
-            SplitBlock(order + 1);
-            if (!_freeLists[order + 1])
-                return;
-        }
-        
-        // Remove block from higher order list
-        FreeBlock* block = _freeLists[order + 1];
-        _freeLists[order + 1] = block->next;
-        
-        // Split into two buddies
-        size_t blockSize = GetSizeFromOrder(order);
-        FreeBlock* buddy = reinterpret_cast<FreeBlock*>(
-            reinterpret_cast<uint8_t*>(block) + blockSize
-        );
-        
-        // Add both to current order list
-        block->next = buddy;
-        buddy->next = _freeLists[order];
+        FreeBlock* block = ConstructFreeBlock(ptr, _freeLists[order]);
         _freeLists[order] = block;
     }
-    
+
+    inline auto BuddyAllocator::SetBlockState(size_t index, size_t order, BlockState headState) -> void
+    {
+        const size_t span = size_t(1) << order;
+
+        for (size_t i = 0; i < span; ++i)
+        {
+            _blockMeta[index + i].order = static_cast<uint8_t>(order);
+            _blockMeta[index + i].state = (i == 0) ? headState : BlockState::Interior;
+        }
+    }
+
+    inline auto BuddyAllocator::SplitToOrder(size_t order) -> bool
+    {
+        size_t splitOrder = order;
+        while (splitOrder < _maxOrder && !_freeLists[splitOrder])
+            ++splitOrder;
+
+        if (splitOrder >= _maxOrder)
+            return false;
+
+        FreeBlock* block = _freeLists[splitOrder];
+        _freeLists[splitOrder] = block->next;
+        DestroyFreeBlock(block);
+
+        size_t blockIndex = GetBlockIndex(block);
+        while (splitOrder > order)
+        {
+            --splitOrder;
+
+            const size_t buddyIndex = blockIndex + (size_t(1) << splitOrder);
+            SetBlockState(blockIndex, splitOrder, BlockState::FreeHead);
+            SetBlockState(buddyIndex, splitOrder, BlockState::FreeHead);
+            PushFreeBlock(splitOrder, GetBlockFromIndex(buddyIndex));
+        }
+
+        PushFreeBlock(order, block);
+        return true;
+    }
+
     inline auto BuddyAllocator::AllocateBlock(size_t order) -> void*
     {
         if (order >= _maxOrder)
             return nullptr;
-        
-        // Find a free block of the requested order
-        if (!_freeLists[order])
-        {
-            // Split a larger block
-            SplitBlock(order);
-            if (!_freeLists[order])
-                return nullptr;
-        }
-        
-        // Remove from free list
+
+        if (!_freeLists[order] && !SplitToOrder(order))
+            return nullptr;
+
         FreeBlock* block = _freeLists[order];
         _freeLists[order] = block->next;
-        
-        // Mark as used
-        size_t index = GetBlockIndex(block);
-        MarkBlockUsed(index, order);
-        
+        DestroyFreeBlock(block);
+
+        const size_t index = GetBlockIndex(block);
+        SetBlockState(index, order, BlockState::UsedHead);
         return block;
     }
-    
-    inline auto BuddyAllocator::DeallocateBlock(void* ptr, size_t order) -> void
+
+    inline auto BuddyAllocator::DeallocateBlock(size_t index, size_t order) -> void
     {
-        if (!ptr || order >= _maxOrder)
-            return;
-        
-        size_t index = GetBlockIndex(ptr);
-        
-        // Try to merge with buddy
-        while (order < _maxOrder - 1)
+        while (order + 1 < _maxOrder)
         {
-            void* buddy = GetBuddy(ptr, order);
-            size_t buddyIndex = GetBlockIndex(buddy);
-            
-            // Check if buddy is free
-            bool buddyFree = true;
-            size_t blockSize = GetSizeFromOrder(order);
-            size_t numMinBlocks = blockSize / MIN_BLOCK_SIZE;
-            
-            for (size_t i = 0; i < numMinBlocks; ++i)
-            {
-                if (!IsBlockFree(buddyIndex + i, 0))
-                {
-                    buddyFree = false;
-                    break;
-                }
-            }
-            
-            if (!buddyFree)
+            const size_t buddyIndex = GetBuddyIndex(index, order);
+            if (_blockMeta[buddyIndex].state != BlockState::FreeHead || _blockMeta[buddyIndex].order != order)
                 break;
-            
-            // Remove buddy from free list
-            FreeBlock** current = &_freeLists[order];
-            while (*current)
-            {
-                if (*current == buddy)
-                {
-                    *current = (*current)->next;
-                    break;
-                }
-                current = &((*current)->next);
-            }
-            
-            // Merge with buddy (use lower address)
-            if (buddy < ptr)
-            {
-                ptr = buddy;
-                index = buddyIndex;
-            }
-            
-            order++;
+
+            if (!RemoveFreeBlock(order, GetBlockFromIndex(buddyIndex)))
+                break;
+
+            index = std::min(index, buddyIndex);
+            ++order;
         }
-        
-        // Mark as free and add to free list
-        MarkBlockFree(index, order);
-        FreeBlock* block = static_cast<FreeBlock*>(ptr);
-        block->next = _freeLists[order];
-        _freeLists[order] = block;
+
+        SetBlockState(index, order, BlockState::FreeHead);
+        PushFreeBlock(order, GetBlockFromIndex(index));
     }
 }

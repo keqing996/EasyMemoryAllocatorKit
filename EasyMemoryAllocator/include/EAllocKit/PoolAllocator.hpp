@@ -1,6 +1,9 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <new>
 #include <stdexcept>
 
 namespace EAllocKit
@@ -10,20 +13,37 @@ namespace EAllocKit
     public:
         struct Node
         {
-            Node* pNext = nullptr;
+            Node() = default;
+
+            auto GetNext() const -> const Node*
+            {
+                return _pNext;
+            }
+
+        private:
+            friend class PoolAllocator;
+
+            explicit Node(Node* pNext)
+                : _pNext(pNext)
+            {
+            }
+
+            Node* _pNext = nullptr;
         };
 
-        explicit PoolAllocator(size_t blockSize, size_t blockNum, size_t defaultAlignment = 4);
+        explicit PoolAllocator(size_t blockSize, size_t blockNum, size_t defaultAlignment = alignof(std::max_align_t));
         ~PoolAllocator();
 
         PoolAllocator(const PoolAllocator& rhs) = delete;
         PoolAllocator(PoolAllocator&& rhs) = delete;
 
     public:
+        // PoolAllocator is not thread-safe; shared access requires external synchronization.
         auto Allocate() -> void*;
+        // Invalid, foreign, misaligned, or already-free pointers are ignored.
         auto Deallocate(void* p) -> void;
         auto GetAvailableBlockCount() const -> size_t;
-        auto GetFreeListHeadNode() const -> Node*;
+        auto GetFreeListHeadNode() const -> const Node*;
 
     private: // Util functions
         static auto IsPowerOfTwo(size_t value) -> bool
@@ -31,77 +51,114 @@ namespace EAllocKit
             return value > 0 && (value & (value - 1)) == 0;
         }
 
-        static auto UpAlignment(size_t size, size_t alignment) -> size_t
+        static auto AddWillOverflow(size_t lhs, size_t rhs) -> bool
         {
-            return (size + alignment - 1) & ~(alignment - 1);
+            return lhs > std::numeric_limits<size_t>::max() - rhs;
         }
 
-        template <typename T>
-        static auto ToAddr(const T* p) -> size_t
+        static auto MulWillOverflow(size_t lhs, size_t rhs) -> bool
         {
-            return reinterpret_cast<size_t>(p);
+            return rhs != 0 && lhs > std::numeric_limits<size_t>::max() / rhs;
         }
 
-        template <typename T>
-        static auto PtrOffsetBytes(T* ptr, std::ptrdiff_t offset) -> T*
+        static auto TryAlignUp(size_t value, size_t alignment, size_t& alignedValue) -> bool
         {
-            return reinterpret_cast<T*>(static_cast<uint8_t*>(static_cast<void*>(ptr)) + offset);
+            const size_t mask = alignment - 1;
+            if (value > std::numeric_limits<size_t>::max() - mask)
+                return false;
+
+            alignedValue = (value + mask) & ~mask;
+            return true;
         }
+
+        auto GetBlockAddress(size_t index) const -> uint8_t*
+        {
+            return _pData + index * _blockStride;
+        }
+
+        auto GetNodeFromIndex(size_t index) const -> Node*
+        {
+            return std::launder(reinterpret_cast<Node*>(GetBlockAddress(index)));
+        }
+
+        auto ConstructFreeNode(size_t index, Node* pNext) -> Node*
+        {
+            return ::new (static_cast<void*>(GetBlockAddress(index))) Node(pNext);
+        }
+
+        auto TryGetBlockIndex(const void* p, size_t& index) const -> bool;
+        auto InitializeFreeList() -> void;
 
     private:
+        uint8_t* _pAllocation;
         uint8_t* _pData;
+        uint8_t* _pBlockStates;
         size_t _blockSize;
         size_t _blockNum;
         size_t _defaultAlignment;
+        size_t _blockStride;
+        size_t _availableBlockCount;
         Node* _pFreeBlockList;
     };
 
     inline PoolAllocator::PoolAllocator(size_t blockSize, size_t blockNum, size_t defaultAlignment)
-        : _blockSize(blockSize)
+        : _pAllocation(nullptr)
+        , _pData(nullptr)
+        , _pBlockStates(nullptr)
+        , _blockSize(blockSize)
         , _blockNum(blockNum)
         , _defaultAlignment(defaultAlignment)
+        , _blockStride(0)
+        , _availableBlockCount(0)
+        , _pFreeBlockList(nullptr)
     {
-        if (!IsPowerOfTwo(defaultAlignment))
+        if (_blockSize == 0)
+            throw std::invalid_argument("PoolAllocator blockSize must be greater than 0");
+
+        if (!IsPowerOfTwo(_defaultAlignment))
             throw std::invalid_argument("PoolAllocator defaultAlignment must be a power of 2");
-            
-        if (blockNum == 0)
-        {
-            _pData = nullptr;
-            _pFreeBlockList = nullptr;
-        }
-        else
-        {
-            // Calculate space needed per block: Node header + space for distance + user data + padding for alignment
-            size_t headerSize = sizeof(Node);
-            size_t minimalUserOffset = headerSize + 4; // 4 bytes for distance storage
-            size_t maxPadding = _defaultAlignment - 1;
-            size_t blockRequiredSize = minimalUserOffset + _blockSize + maxPadding;
-            size_t needSize = blockRequiredSize * blockNum;
 
-            _pData = static_cast<uint8_t*>(::malloc(needSize));
+        if (_defaultAlignment < alignof(std::max_align_t))
+            _defaultAlignment = alignof(std::max_align_t);
 
-            _pFreeBlockList = reinterpret_cast<Node*>(_pData);
-            for (size_t i = 0; i < blockNum; i++)
-            {
-                Node* pBlockNode = reinterpret_cast<Node*>(_pData + i * blockRequiredSize);
-                if (i == blockNum - 1)
-                    pBlockNode->pNext = nullptr;
-                else
-                {
-                    Node* pNextBlockNode = reinterpret_cast<Node*>(_pData + (i + 1) * blockRequiredSize);
-                    pBlockNode->pNext = pNextBlockNode;
-                }
-            }
-        }
+        if (_defaultAlignment < alignof(Node))
+            _defaultAlignment = alignof(Node);
+
+        const size_t minBlockSize = _blockSize < sizeof(Node) ? sizeof(Node) : _blockSize;
+        if (!TryAlignUp(minBlockSize, _defaultAlignment, _blockStride))
+            throw std::overflow_error("PoolAllocator block stride overflow");
+
+        if (_blockNum == 0)
+            return;
+
+        if (MulWillOverflow(_blockStride, _blockNum))
+            throw std::overflow_error("PoolAllocator pool size overflow");
+
+        const size_t poolBytes = _blockStride * _blockNum;
+        const size_t stateBytes = _blockNum;
+        if (AddWillOverflow(poolBytes, stateBytes))
+            throw std::overflow_error("PoolAllocator pool size overflow");
+
+        const size_t totalBytes = poolBytes + stateBytes;
+        _pAllocation = static_cast<uint8_t*>(::operator new(totalBytes, std::align_val_t(_defaultAlignment)));
+        _pData = _pAllocation;
+        _pBlockStates = _pData + poolBytes;
+
+        InitializeFreeList();
     }
 
     inline PoolAllocator::~PoolAllocator()
     {
-        if (_pData != nullptr)
+        if (_pAllocation != nullptr)
         {
-            ::free(_pData);
-            _pData = nullptr;
+            ::operator delete(_pAllocation, std::align_val_t(_defaultAlignment));
+            _pAllocation = nullptr;
         }
+
+        _pData = nullptr;
+        _pBlockStates = nullptr;
+        _pFreeBlockList = nullptr;
+        _availableBlockCount = 0;
     }
 
     inline auto PoolAllocator::Allocate() -> void*
@@ -110,57 +167,74 @@ namespace EAllocKit
             return nullptr;
 
         Node* pResult = _pFreeBlockList;
-        _pFreeBlockList = _pFreeBlockList->pNext;
-        
-        // Calculate aligned user data address (like FreeListAllocator)
-        size_t nodeStartAddr = ToAddr(pResult);
-        size_t headerSize = sizeof(Node);
-        size_t afterHeaderAddr = nodeStartAddr + headerSize;
-        size_t minimalUserAddr = afterHeaderAddr + 4;  // Reserve 4 bytes for distance
-        size_t alignedUserAddr = UpAlignment(minimalUserAddr, _defaultAlignment);
-        
-        // Store distance from user pointer back to node header
-        void* pAlignedUserData = reinterpret_cast<void*>(alignedUserAddr);
-        uint32_t distance = static_cast<uint32_t>(alignedUserAddr - nodeStartAddr);
-        uint32_t* pDistanceStorage = reinterpret_cast<uint32_t*>(alignedUserAddr - 4);
-        *pDistanceStorage = distance;
-        
-        return pAlignedUserData;
+        _pFreeBlockList = _pFreeBlockList->_pNext;
+
+        const size_t blockIndex = static_cast<size_t>(reinterpret_cast<uint8_t*>(pResult) - _pData) / _blockStride;
+        _pBlockStates[blockIndex] = 0;
+        --_availableBlockCount;
+
+        return pResult;
     }
 
     inline auto PoolAllocator::Deallocate(void* p) -> void
     {
         if (p == nullptr)
-            return; 
-            
-        // Retrieve distance to find the node header (like FreeListAllocator)
-        uint32_t* pDistanceStorage = reinterpret_cast<uint32_t*>(static_cast<char*>(p) - 4);
-        uint32_t distance = *pDistanceStorage;
-        
-        // Calculate node address
-        size_t userAddr = ToAddr(p);
-        size_t nodeAddr = userAddr - distance;
-        Node* pNode = reinterpret_cast<Node*>(nodeAddr);
-        
-        pNode->pNext = _pFreeBlockList;
-        _pFreeBlockList = pNode;
+            return;
+
+        size_t blockIndex = 0;
+        if (!TryGetBlockIndex(p, blockIndex))
+            return;
+
+        if (_pBlockStates[blockIndex] != 0)
+            return;
+
+        _pFreeBlockList = ConstructFreeNode(blockIndex, _pFreeBlockList);
+        _pBlockStates[blockIndex] = 1;
+        ++_availableBlockCount;
     }
 
     inline auto PoolAllocator::GetAvailableBlockCount() const -> size_t
     {
-        size_t count = 0;
-        Node* pCurrent = _pFreeBlockList;
-        while (pCurrent != nullptr)
-        {
-            pCurrent = pCurrent->pNext;
-            count++;
-        }
-
-        return count;
+        return _availableBlockCount;
     }
 
-    inline auto PoolAllocator::GetFreeListHeadNode() const -> Node*
+    inline auto PoolAllocator::GetFreeListHeadNode() const -> const Node*
     {
         return _pFreeBlockList;
+    }
+
+    inline auto PoolAllocator::TryGetBlockIndex(const void* p, size_t& index) const -> bool
+    {
+        if (_pData == nullptr || _blockNum == 0)
+            return false;
+
+        const size_t dataBegin = reinterpret_cast<size_t>(_pData);
+        const size_t poolBytes = _blockStride * _blockNum;
+        const size_t ptrValue = reinterpret_cast<size_t>(p);
+
+        if (ptrValue < dataBegin)
+            return false;
+
+        const size_t offset = ptrValue - dataBegin;
+        if (offset >= poolBytes)
+            return false;
+
+        if (offset % _blockStride != 0)
+            return false;
+
+        index = offset / _blockStride;
+        return index < _blockNum;
+    }
+
+    inline auto PoolAllocator::InitializeFreeList() -> void
+    {
+        _availableBlockCount = _blockNum;
+        _pFreeBlockList = nullptr;
+        for (size_t i = _blockNum; i > 0; --i)
+        {
+            const size_t blockIndex = i - 1;
+            _pFreeBlockList = ConstructFreeNode(blockIndex, _pFreeBlockList);
+            _pBlockStates[blockIndex] = 1;
+        }
     }
 }

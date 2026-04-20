@@ -1,979 +1,557 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
+
+#include <atomic>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <limits>
+#include <memory>
+#include <new>
 #include <thread>
 #include <vector>
-#include <random>
-#include <chrono>
-#include <atomic>
-#include <cstring>
-#include <cstdlib>
+
 #include "EAllocKit/ThreadCachingAllocator.hpp"
 
 using namespace EAllocKit;
 
 namespace
 {
-    // Test structures of various sizes
-    struct SmallObject 
+    struct DefaultAlignedObject
     {
+        std::max_align_t anchor{};
         int value = 42;
-        char padding[24]; // Make it 28 bytes total
-    };
-    
-    struct MediumObject
-    {
-        double values[16]; // 128 bytes
-        char padding[128]; // 256 bytes total
-    };
-    
-    struct LargeObject
-    {
-        char data[1024]; // 1KB - fits within allocator's large class size
     };
 
-    // Helper for measuring time
-    class Timer
+    struct alignas(64) OverAlignedObject
     {
-    public:
-        Timer() : _start(std::chrono::high_resolution_clock::now()) {}
-        
-        double ElapsedMs() const
-        {
-            auto end = std::chrono::high_resolution_clock::now();
-            auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - _start);
-            return duration.count() / 1000.0;
-        }
-        
-    private:
-        std::chrono::high_resolution_clock::time_point _start;
+        std::uint64_t words[8]{};
     };
 
-    // Thread-safe allocations counter
-    std::atomic<size_t> g_allocCount{0};
-    std::atomic<size_t> g_deallocCount{0};
+    constexpr size_t kLargeWarmupAllocations = (ThreadCachingAllocator::kMaxLargeObjects / 2) + 1;
+
+    auto ExpectedLargeCacheBytesAfterWarmup() -> size_t
+    {
+        return ThreadCachingAllocator::kMaxLargeObjects * ThreadCachingAllocator::kLargeThreshold;
+    }
+
+    constexpr size_t DefaultAlignedMetadataOverhead()
+    {
+        return sizeof(ThreadCachingAllocator::AllocationHeader) +
+               sizeof(ThreadCachingAllocator::AllocationMarker) +
+               (ThreadCachingAllocator::kDefaultAlignment - 1);
+    }
+
+    constexpr size_t MaxDefaultAlignedPayloadFor(size_t classBytes)
+    {
+        return classBytes - DefaultAlignedMetadataOverhead();
+    }
 }
 
-TEST_CASE("ThreadCachingAllocator Basic Functionality")
+TEST_CASE("ThreadCachingAllocator honors default and explicit alignment contracts")
 {
     ThreadCachingAllocator allocator;
-    
-    SUBCASE("Single small object allocation")
+
+    SUBCASE("default raw allocations are max_align_t-aligned")
     {
-        void* ptr = allocator.Allocate(32);
-        CHECK(ptr != nullptr);
-        
-        // Write to memory to ensure it's valid
-        *static_cast<int*>(ptr) = 0xDEADBEEF;
-        CHECK(*static_cast<int*>(ptr) == 0xDEADBEEF);
-        
+        void* ptr = allocator.Allocate(64);
+        REQUIRE(ptr != nullptr);
+
+        const auto address = reinterpret_cast<std::uintptr_t>(ptr);
+        CHECK(address % ThreadCachingAllocator::kDefaultAlignment == 0);
+
+        std::memset(ptr, 0xAB, 64);
         allocator.Deallocate(ptr);
     }
-    
-    SUBCASE("Multiple small objects")
+
+    SUBCASE("default API is safe for ordinary typed allocations")
     {
-        constexpr size_t numObjects = 100;
-        std::vector<void*> ptrs;
-        ptrs.reserve(numObjects);
-        
-        // Allocate
-        for (size_t i = 0; i < numObjects; ++i)
+        void* storage = allocator.Allocate(sizeof(DefaultAlignedObject));
+        REQUIRE(storage != nullptr);
+
+        const auto address = reinterpret_cast<std::uintptr_t>(storage);
+        CHECK(address % alignof(DefaultAlignedObject) == 0);
+
+        auto* object = new (storage) DefaultAlignedObject{};
+        CHECK(object->value == 42);
+        object->~DefaultAlignedObject();
+        allocator.Deallocate(storage);
+    }
+
+    SUBCASE("explicit over-aligned typed allocations are honored")
+    {
+        void* storage = allocator.Allocate(sizeof(OverAlignedObject), alignof(OverAlignedObject));
+        REQUIRE(storage != nullptr);
+
+        const auto address = reinterpret_cast<std::uintptr_t>(storage);
+        CHECK(address % alignof(OverAlignedObject) == 0);
+
+        auto* object = new (storage) OverAlignedObject{};
+        object->words[0] = 0x12345678ULL;
+        CHECK(object->words[0] == 0x12345678ULL);
+        object->~OverAlignedObject();
+        allocator.Deallocate(storage);
+    }
+
+    SUBCASE("small explicit alignments use byte-safe metadata")
+    {
+        constexpr std::array<size_t, 4> kAlignments{1, 2, 4, 8};
+
+        for (size_t alignment : kAlignments)
         {
-            void* ptr = allocator.Allocate(64);
-            CHECK(ptr != nullptr);
-            ptrs.push_back(ptr);
-            
-            // Initialize memory
-            *static_cast<size_t*>(ptr) = i;
-        }
-        
-        // Verify memory integrity
-        for (size_t i = 0; i < numObjects; ++i)
-        {
-            CHECK(*static_cast<size_t*>(ptrs[i]) == i);
-        }
-        
-        // Deallocate
-        for (void* ptr : ptrs)
-        {
+            INFO("alignment=" << alignment);
+
+            void* ptr = allocator.Allocate(23, alignment);
+            REQUIRE(ptr != nullptr);
+
+            const auto address = reinterpret_cast<std::uintptr_t>(ptr);
+            CHECK(address % alignment == 0);
+
+            std::memset(ptr, 0x5A, 23);
+            CHECK(static_cast<unsigned char*>(ptr)[22] == 0x5A);
             allocator.Deallocate(ptr);
         }
     }
-    
-    SUBCASE("Medium object allocation")
+}
+
+TEST_CASE("ThreadCachingAllocator validates invalid inputs and overflow")
+{
+    ThreadCachingAllocator allocator;
+
+    SUBCASE("zero-sized allocation returns nullptr")
     {
-        void* ptr = allocator.Allocate(1024); // 1KB - maximum size for medium class
-        CHECK(ptr != nullptr);
-        
-        // Test write to medium memory block
-        char* charPtr = static_cast<char*>(ptr);
-        charPtr[0] = 'A';
-        charPtr[1023] = 'Z';  // Last byte of 1KB allocation
-        
-        CHECK(charPtr[0] == 'A');
-        CHECK(charPtr[1023] == 'Z');
-        
-        allocator.Deallocate(ptr);
+        CHECK(allocator.Allocate(0) == nullptr);
     }
-    
-    SUBCASE("Large object allocation")
+
+    SUBCASE("invalid alignments throw")
     {
-        void* ptr = allocator.Allocate(2048); // 2KB - truly in large class (>1024)
-        CHECK(ptr != nullptr);
-        
-        // Test write to large memory block
-        char* charPtr = static_cast<char*>(ptr);
-        charPtr[0] = 'A';
-        charPtr[1023] = 'Z';  // Note: Large class still uses 1KB blocks internally
-        
-        CHECK(charPtr[0] == 'A');
-        CHECK(charPtr[1023] == 'Z');
-        
-        allocator.Deallocate(ptr);
+        CHECK_THROWS_AS(allocator.Allocate(64, 0), std::invalid_argument);
+        CHECK_THROWS_AS(allocator.Allocate(64, 3), std::invalid_argument);
     }
-    
-    SUBCASE("Mixed size allocations")
+
+    SUBCASE("size arithmetic overflow returns nullptr")
     {
-        std::vector<std::pair<void*, size_t>> allocations;
-        // Test all size classes: SMALL (≤128), MEDIUM (129-1024), LARGE (>1024)
-        std::vector<size_t> sizes = {8, 16, 32, 64, 128, 256, 512, 1024, 1536, 2048};
-        
-        for (size_t size : sizes)
+        CHECK(allocator.Allocate((std::numeric_limits<size_t>::max)(), ThreadCachingAllocator::kDefaultAlignment) == nullptr);
+
+        const size_t hugeAlignment = size_t(1) << (std::numeric_limits<size_t>::digits - 1);
+        CHECK(allocator.Allocate(hugeAlignment, hugeAlignment) == nullptr);
+    }
+}
+
+TEST_CASE("ThreadCachingAllocator keeps pooled-large and direct-large behavior distinct")
+{
+    SUBCASE("requests below the pooled large payload boundary stay cached")
+    {
+        ThreadCachingAllocator allocator;
+        std::vector<void*> pointers;
+        const size_t requestSize = ThreadCachingAllocator::kLargeThreshold - 64;
+
+        for (size_t i = 0; i < kLargeWarmupAllocations; ++i)
         {
-            for (int i = 0; i < 10; ++i)
+            void* ptr = allocator.Allocate(requestSize);
+            REQUIRE(ptr != nullptr);
+            std::memset(ptr, static_cast<int>(0x40 + i), requestSize);
+            pointers.push_back(ptr);
+        }
+
+        for (void* ptr : pointers)
+        {
+            allocator.Deallocate(ptr);
+        }
+
+        CHECK(allocator.GetThreadCacheSize() == ExpectedLargeCacheBytesAfterWarmup());
+    }
+
+    SUBCASE("requests at the public 4KB boundary go direct because metadata still has to fit")
+    {
+        ThreadCachingAllocator allocator;
+        const size_t requestSize = ThreadCachingAllocator::kLargeThreshold;
+
+        std::vector<void*> pointers;
+        for (size_t i = 0; i < 3; ++i)
+        {
+            void* ptr = allocator.Allocate(requestSize);
+            REQUIRE(ptr != nullptr);
+            std::memset(ptr, 0x7E, requestSize);
+            CHECK(static_cast<unsigned char*>(ptr)[requestSize - 1] == 0x7E);
+            pointers.push_back(ptr);
+        }
+
+        for (void* ptr : pointers)
+        {
+            allocator.Deallocate(ptr);
+        }
+
+        CHECK(allocator.GetThreadCacheSize() == 0);
+    }
+}
+
+TEST_CASE("ThreadCachingAllocator exposes stable default-aligned payload boundaries")
+{
+    constexpr size_t kMaxSmallPayload =
+        MaxDefaultAlignedPayloadFor(ThreadCachingAllocator::kSmallThreshold);
+    constexpr size_t kFirstMediumPayload = kMaxSmallPayload + 1;
+    constexpr size_t kMaxMediumPayload =
+        MaxDefaultAlignedPayloadFor(ThreadCachingAllocator::kMediumThreshold);
+    constexpr size_t kFirstLargePayload = kMaxMediumPayload + 1;
+    constexpr size_t kMaxLargePayload =
+        MaxDefaultAlignedPayloadFor(ThreadCachingAllocator::kLargeThreshold);
+    constexpr size_t kFirstDirectPayload = kMaxLargePayload + 1;
+
+    static_assert(kMaxSmallPayload > 0);
+
+    auto expectCachedClass = [](size_t warmupRequest, size_t requestSize, size_t expectedClassBytes)
+    {
+        ThreadCachingAllocator allocator;
+
+        void* warmup = allocator.Allocate(warmupRequest);
+        REQUIRE(warmup != nullptr);
+        allocator.Deallocate(warmup);
+
+        const size_t before = allocator.GetThreadCacheSize();
+        REQUIRE(before >= expectedClassBytes);
+
+        void* ptr = allocator.Allocate(requestSize);
+        REQUIRE(ptr != nullptr);
+        CHECK(allocator.GetThreadCacheSize() == before - expectedClassBytes);
+
+        allocator.Deallocate(ptr);
+        CHECK(allocator.GetThreadCacheSize() == before);
+    };
+
+    SUBCASE("largest small payload stays in the small cache")
+    {
+        expectCachedClass(kMaxSmallPayload, kMaxSmallPayload, ThreadCachingAllocator::kSmallThreshold);
+    }
+
+    SUBCASE("first medium payload moves to the medium cache")
+    {
+        expectCachedClass(kFirstMediumPayload, kFirstMediumPayload, ThreadCachingAllocator::kMediumThreshold);
+    }
+
+    SUBCASE("first large payload moves to the large cache")
+    {
+        expectCachedClass(kFirstLargePayload, kFirstLargePayload, ThreadCachingAllocator::kLargeThreshold);
+    }
+
+    SUBCASE("first direct payload bypasses thread caches")
+    {
+        ThreadCachingAllocator allocator;
+        void* ptr = allocator.Allocate(kFirstDirectPayload);
+        REQUIRE(ptr != nullptr);
+        CHECK(allocator.GetThreadCacheSize() == 0);
+        allocator.Deallocate(ptr);
+        CHECK(allocator.GetThreadCacheSize() == 0);
+    }
+}
+
+TEST_CASE("ThreadCachingAllocator does not manufacture a cache on cross-thread free")
+{
+    ThreadCachingAllocator allocator;
+    std::vector<void*> pointers;
+
+    for (int i = 0; i < 12; ++i)
+    {
+        void* ptr = allocator.Allocate(64);
+        REQUIRE(ptr != nullptr);
+        pointers.push_back(ptr);
+    }
+
+    REQUIRE(allocator.GetThreadCacheSize() > 0);
+
+    std::atomic<size_t> consumerCacheBefore{std::numeric_limits<size_t>::max()};
+    std::atomic<size_t> consumerCacheAfter{std::numeric_limits<size_t>::max()};
+
+    std::thread consumer([&]()
+    {
+        consumerCacheBefore.store(allocator.GetThreadCacheSize(), std::memory_order_release);
+        for (void* ptr : pointers)
+        {
+            allocator.Deallocate(ptr);
+        }
+        consumerCacheAfter.store(allocator.GetThreadCacheSize(), std::memory_order_release);
+    });
+
+    consumer.join();
+
+    CHECK(consumerCacheBefore.load(std::memory_order_acquire) == 0);
+    CHECK(consumerCacheAfter.load(std::memory_order_acquire) == 0);
+}
+
+TEST_CASE("ThreadCachingAllocator reuses an existing consumer cache for cross-thread frees")
+{
+    ThreadCachingAllocator allocator;
+    std::vector<void*> producerPointers;
+
+    for (int i = 0; i < 10; ++i)
+    {
+        void* ptr = allocator.Allocate(64);
+        REQUIRE(ptr != nullptr);
+        producerPointers.push_back(ptr);
+    }
+
+    std::atomic<size_t> consumerCacheBefore{0};
+    std::atomic<size_t> consumerCacheAfterWarmup{0};
+    std::atomic<size_t> consumerCacheAfterCrossThreadFree{0};
+
+    std::thread consumer([&]()
+    {
+        void* warmup = allocator.Allocate(64);
+        REQUIRE(warmup != nullptr);
+        allocator.Deallocate(warmup);
+
+        consumerCacheBefore.store(allocator.GetThreadCacheSize(), std::memory_order_release);
+        for (void* ptr : producerPointers)
+        {
+            allocator.Deallocate(ptr);
+        }
+        consumerCacheAfterWarmup.store(allocator.GetThreadCacheSize(), std::memory_order_release);
+
+        void* reuse = allocator.Allocate(64);
+        REQUIRE(reuse != nullptr);
+        allocator.Deallocate(reuse);
+        consumerCacheAfterCrossThreadFree.store(allocator.GetThreadCacheSize(), std::memory_order_release);
+    });
+
+    consumer.join();
+
+    CHECK(consumerCacheBefore.load(std::memory_order_acquire) > 0);
+    CHECK(consumerCacheAfterWarmup.load(std::memory_order_acquire) >
+          consumerCacheBefore.load(std::memory_order_acquire));
+    CHECK(consumerCacheAfterCrossThreadFree.load(std::memory_order_acquire) ==
+          consumerCacheAfterWarmup.load(std::memory_order_acquire));
+}
+
+TEST_CASE("ThreadCachingAllocator teardown tolerates live current-thread and worker-thread caches")
+{
+    SUBCASE("destroying an allocator with a live current-thread cache does not crash")
+    {
+        CHECK_NOTHROW([]
+        {
+            for (int iteration = 0; iteration < 32; ++iteration)
             {
-                void* ptr = allocator.Allocate(size);
-                CHECK(ptr != nullptr);
-                allocations.emplace_back(ptr, size);
-                
-                // For large allocations (>1024), the allocator uses 1KB blocks internally
-                // So we can only safely access up to 1KB even for larger requests
-                size_t testSize = std::min(size, size_t(1024));
-                
-                // Note: We don't expect memory to be zero-initialized from cache
-                // This is normal behavior for performance-oriented allocators
-                char* charPtr = static_cast<char*>(ptr);
-                
-                // Write a test pattern and verify it
-                unsigned char pattern = static_cast<unsigned char>((size + i) & 0xFF);
-                std::memset(ptr, pattern, testSize);
-                
-                // Verify pattern was written correctly
-                for (size_t j = 0; j < testSize; ++j)
+                auto allocator = std::make_unique<ThreadCachingAllocator>();
+                std::vector<void*> pointers;
+
+                for (int i = 0; i < 16; ++i)
                 {
-                    CHECK(static_cast<unsigned char>(charPtr[j]) == pattern);
+                    void* ptr = allocator->Allocate(64);
+                    REQUIRE(ptr != nullptr);
+                    pointers.push_back(ptr);
                 }
+
+                for (void* ptr : pointers)
+                {
+                    allocator->Deallocate(ptr);
+                }
+
+                REQUIRE(allocator->GetThreadCacheSize() > 0);
             }
-        }
-        
-        // Deallocate all allocations
-        for (auto& [ptr, size] : allocations)
-        {
-            allocator.Deallocate(ptr);
-        }
+        }());
     }
-}
 
-TEST_CASE("ThreadCachingAllocator Size Classes")
-{
-    ThreadCachingAllocator allocator;
-    
-    SUBCASE("Size class boundaries")
+    SUBCASE("worker-thread caches can drain before allocator destruction")
     {
-        // Test allocations at size class boundaries
-        std::vector<size_t> testSizes = {
-            1, 8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 
-            1024, 1536, 2048, 3072, 4096, 6144, 8192, 12288, 16384, 24576, 32768
-        };
-        
-        for (size_t size : testSizes)
-        {
-            void* ptr = allocator.Allocate(size);
-            CHECK(ptr != nullptr);
-            
-            // For large allocations (>1024), the allocator uses 1KB blocks internally
-            // So we can only safely write up to 1KB even for larger requests
-            size_t safeWriteSize = std::min(size, size_t(1024));
-            
-            // Verify we can write to the allocated memory (safely)
-            std::memset(ptr, 0xAB, safeWriteSize);
-            
-            allocator.Deallocate(ptr);
-        }
-    }
-    
-    SUBCASE("Alignment requirements")
-    {
-        // Test default alignment (8 bytes) - this is what the allocator guarantees
-        std::vector<size_t> alignments = {1, 2, 4, 8}; // Only test up to default alignment
-        
-        for (size_t alignment : alignments)
-        {
-            void* ptr = allocator.Allocate(128, alignment);
-            CHECK(ptr != nullptr);
-            
-            // Check alignment - should work for alignments <= kDefaultAlignment
-            uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
-            CHECK((addr % alignment) == 0);
-            
-            allocator.Deallocate(ptr);
-        }
-    }
-}
+        auto allocator = std::make_unique<ThreadCachingAllocator>();
+        std::atomic<size_t> workerCacheBytes{0};
+        std::atomic<bool> workerOk{true};
 
-TEST_CASE("ThreadCachingAllocator Multithreading")
-{
-    ThreadCachingAllocator allocator;
-    constexpr size_t numThreads = 8;
-    constexpr size_t allocationsPerThread = 1000;
-    
-    SUBCASE("Concurrent allocations")
-    {
-        std::vector<std::thread> threads;
-        std::atomic<bool> startFlag{false};
-        std::atomic<size_t> successCount{0};
-        
-        // Launch threads
-        for (size_t t = 0; t < numThreads; ++t)
+        std::thread worker([&]()
         {
-            threads.emplace_back([&, t]()
+            std::vector<void*> pointers;
+            for (int i = 0; i < 24; ++i)
             {
-                // Wait for start signal
-                while (!startFlag.load()) 
+                void* ptr = allocator->Allocate(128);
+                if (!ptr)
+                {
+                    workerOk.store(false, std::memory_order_release);
+                    return;
+                }
+                pointers.push_back(ptr);
+            }
+
+            for (void* ptr : pointers)
+            {
+                allocator->Deallocate(ptr);
+            }
+
+            workerCacheBytes.store(allocator->GetThreadCacheSize(), std::memory_order_release);
+        });
+
+        worker.join();
+
+        CHECK(workerOk.load(std::memory_order_acquire));
+        CHECK(workerCacheBytes.load(std::memory_order_acquire) > 0);
+        CHECK_NOTHROW(allocator.reset());
+    }
+
+    SUBCASE("worker TLS teardown after allocator destruction remains safe")
+    {
+        CHECK_NOTHROW([]
+        {
+            for (int iteration = 0; iteration < 32; ++iteration)
+            {
+                auto allocator = std::make_unique<ThreadCachingAllocator>();
+                std::atomic<bool> cacheReady{false};
+                std::atomic<bool> releaseWorker{false};
+                std::atomic<bool> workerOk{true};
+
+                std::thread worker([&]()
+                {
+                    std::vector<void*> pointers;
+                    for (int i = 0; i < 24; ++i)
+                    {
+                        void* ptr = allocator->Allocate(128);
+                        if (!ptr)
+                        {
+                            workerOk.store(false, std::memory_order_release);
+                            cacheReady.store(true, std::memory_order_release);
+                            return;
+                        }
+                        pointers.push_back(ptr);
+                    }
+
+                    for (void* ptr : pointers)
+                    {
+                        allocator->Deallocate(ptr);
+                    }
+
+                    cacheReady.store(true, std::memory_order_release);
+                    while (!releaseWorker.load(std::memory_order_acquire))
+                    {
+                        std::this_thread::yield();
+                    }
+                });
+
+                while (!cacheReady.load(std::memory_order_acquire))
                 {
                     std::this_thread::yield();
                 }
-                
-                std::vector<void*> localPtrs;
-                localPtrs.reserve(allocationsPerThread);
-                
-                // Allocate
-                for (size_t i = 0; i < allocationsPerThread; ++i)
-                {
-                    size_t size = 32 + (i % 10) * 8; // Vary size between 32-104 bytes
-                    void* ptr = allocator.Allocate(size);
-                    
-                    if (ptr)
-                    {
-                        localPtrs.push_back(ptr);
-                        
-                        // Write thread and allocation ID
-                        struct AllocInfo { size_t threadId; size_t allocId; };
-                        *static_cast<AllocInfo*>(ptr) = {t, i};
-                    }
-                }
-                
-                // Verify data integrity
-                for (size_t i = 0; i < localPtrs.size(); ++i)
-                {
-                    struct AllocInfo { size_t threadId; size_t allocId; };
-                    auto* info = static_cast<AllocInfo*>(localPtrs[i]);
-                    
-                    if (info->threadId == t && info->allocId == i)
-                    {
-                        successCount.fetch_add(1);
-                    }
-                }
-                
-                // Deallocate
-                for (size_t i = 0; i < localPtrs.size(); ++i)
-                {
-                    size_t size = 32 + (i % 10) * 8;
-                    allocator.Deallocate(localPtrs[i]);
-                }
-            });
-        }
-        
-        // Start all threads simultaneously
-        startFlag.store(true);
-        
-        // Wait for completion
-        for (auto& thread : threads)
-        {
-            thread.join();
-        }
-        
-        // Verify all allocations were successful and data was intact
-        CHECK(successCount.load() == numThreads * allocationsPerThread);
-    }
-    
-    SUBCASE("Stress test with random patterns")
-    {
-        std::atomic<bool> stopFlag{false};
-        std::vector<std::thread> threads;
-        
-        // Producer threads
-        for (size_t t = 0; t < numThreads / 2; ++t)
-        {
-            threads.emplace_back([&, t]()
-            {
-                std::mt19937 rng(t);
-                std::uniform_int_distribution<size_t> sizeDist(8, 1024);
-                
-                while (!stopFlag.load())
-                {
-                    size_t size = sizeDist(rng);
-                    void* ptr = allocator.Allocate(size);
-                    
-                    if (ptr)
-                    {
-                        g_allocCount.fetch_add(1);
-                        
-                        // Do some work with the memory
-                        std::memset(ptr, static_cast<int>(t), std::min(size, size_t(64)));
-                        
-                        // Random delay
-                        if (rng() % 100 == 0)
-                        {
-                            std::this_thread::sleep_for(std::chrono::microseconds(1));
-                        }
-                        
-                        allocator.Deallocate(ptr);
-                        g_deallocCount.fetch_add(1);
-                    }
-                }
-            });
-        }
-        
-        // Consumer threads (different pattern)
-        for (size_t t = numThreads / 2; t < numThreads; ++t)
-        {
-            threads.emplace_back([&, t]()
-            {
-                std::mt19937 rng(t + 1000);
-                std::uniform_int_distribution<size_t> sizeDist(16, 512);
-                std::vector<std::pair<void*, size_t>> ptrs;
-                ptrs.reserve(100);
-                
-                while (!stopFlag.load())
-                {
-                    // Allocate batch
-                    for (int i = 0; i < 50; ++i)
-                    {
-                        size_t size = sizeDist(rng);
-                        void* ptr = allocator.Allocate(size);
-                        if (ptr)
-                        {
-                            ptrs.emplace_back(ptr, size);
-                            g_allocCount.fetch_add(1);
-                        }
-                    }
-                    
-                    // Deallocate batch
-                    for (auto& [ptr, size] : ptrs)
-                    {
-                        allocator.Deallocate(ptr);
-                        g_deallocCount.fetch_add(1);
-                    }
-                    ptrs.clear();
-                }
-            });
-        }
-        
-        // Run for a short time
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        stopFlag.store(true);
-        
-        for (auto& thread : threads)
-        {
-            thread.join();
-        }
-        
-        INFO("Total allocations: " << g_allocCount.load());
-        INFO("Total deallocations: " << g_deallocCount.load());
-        
-        CHECK(g_allocCount.load() > 0);
-        CHECK(g_deallocCount.load() > 0);
+
+                REQUIRE(workerOk.load(std::memory_order_acquire));
+                allocator.reset();
+                releaseWorker.store(true, std::memory_order_release);
+                worker.join();
+            }
+        }());
     }
 }
 
-TEST_CASE("ThreadCachingAllocator Performance")
-{
-    ThreadCachingAllocator tcAllocator;
-    constexpr size_t numAllocations = 100000;
-    
-    SUBCASE("Single-threaded performance comparison")
-    {
-        std::vector<size_t> sizes = {16, 32, 64, 128, 256, 512};
-        
-        for (size_t size : sizes)
-        {
-            // Test ThreadCachingAllocator
-            {
-                Timer timer;
-                std::vector<void*> ptrs;
-                ptrs.reserve(numAllocations);
-                
-                // Allocate
-                for (size_t i = 0; i < numAllocations; ++i)
-                {
-                    void* ptr = tcAllocator.Allocate(size);
-                    if (ptr) ptrs.push_back(ptr);
-                }
-                
-                // Deallocate
-                for (void* ptr : ptrs)
-                {
-                    tcAllocator.Deallocate(ptr);
-                }
-                
-                double tcTime = timer.ElapsedMs();
-                INFO("ThreadCaching " << size << " bytes: " << tcTime << "ms");
-            }
-            
-            // Test standard malloc/free for comparison
-            {
-                Timer timer;
-                std::vector<void*> ptrs;
-                ptrs.reserve(numAllocations);
-                
-                // Allocate
-                for (size_t i = 0; i < numAllocations; ++i)
-                {
-                    void* ptr = malloc(size);
-                    if (ptr) ptrs.push_back(ptr);
-                }
-                
-                // Deallocate
-                for (void* ptr : ptrs)
-                {
-                    free(ptr);
-                }
-                
-                double mallocTime = timer.ElapsedMs();
-                INFO("Standard malloc " << size << " bytes: " << mallocTime << "ms");
-            }
-        }
-    }
-    
-    SUBCASE("Multi-threaded performance")
-    {
-        constexpr size_t numThreads = 4;
-        constexpr size_t allocsPerThread = numAllocations / numThreads;
-        
-        Timer timer;
-        std::vector<std::thread> threads;
-        std::atomic<bool> startFlag{false};
-        
-        for (size_t t = 0; t < numThreads; ++t)
-        {
-            threads.emplace_back([&, t]()
-            {
-                while (!startFlag.load())
-                {
-                    std::this_thread::yield();
-                }
-                
-                std::vector<void*> ptrs;
-                ptrs.reserve(allocsPerThread);
-                
-                // Allocate phase
-                for (size_t i = 0; i < allocsPerThread; ++i)
-                {
-                    void* ptr = tcAllocator.Allocate(64);
-                    if (ptr) ptrs.push_back(ptr);
-                }
-                
-                // Deallocate phase
-                for (void* ptr : ptrs)
-                {
-                    tcAllocator.Deallocate(ptr);
-                }
-            });
-        }
-        
-        startFlag.store(true);
-        
-        for (auto& thread : threads)
-        {
-            thread.join();
-        }
-        
-        double totalTime = timer.ElapsedMs();
-        INFO("Multi-threaded (" << numThreads << " threads): " << totalTime << "ms");
-    }
-}
-
-TEST_CASE("ThreadCachingAllocator Statistics and Debugging")
+TEST_CASE("ThreadCachingAllocator ignores duplicate and obviously invalid frees")
 {
     ThreadCachingAllocator allocator;
-    
-    SUBCASE("Statistics tracking")
-    {
-        // Perform some allocations
-        std::vector<std::pair<void*, size_t>> ptrs;
-        size_t totalExpectedSize = 0;
-        
-        for (size_t size : {32, 64, 128, 256})
-        {
-            for (int i = 0; i < 10; ++i)
-            {
-                void* ptr = allocator.Allocate(size);
-                if (ptr)
-                {
-                    ptrs.emplace_back(ptr, size);
-                    totalExpectedSize += size; // Note: actual allocation might be larger due to size classes
-                }
-            }
-        }
-        
-        // Verify we can actually allocate and use memory
-        CHECK(ptrs.size() > 0);
-        
-        // Clean up
-        for (auto& [ptr, size] : ptrs)
-        {
-            allocator.Deallocate(ptr);
-        }
-    }
-    
-    SUBCASE("Thread cache statistics")
-    {
-        // Allocate some objects to populate thread cache
-        std::vector<void*> ptrs;
-        for (int i = 0; i < 100; ++i)
-        {
-            void* ptr = allocator.Allocate(32);
-            if (ptr) ptrs.push_back(ptr);
-        }
-        
-        size_t cacheSize = allocator.GetThreadCacheSize();
-        INFO("Thread cache size: " << cacheSize << " bytes");
-        
-        // Deallocate (should increase cache)
-        for (void* ptr : ptrs)
-        {
-            allocator.Deallocate(ptr);
-        }
-        
-        size_t newCacheSize = allocator.GetThreadCacheSize();
-        CHECK(newCacheSize >= cacheSize); // Cache should grow or stay same
-    }
 
-}
+    SUBCASE("duplicate pooled frees are ignored")
+    {
+        void* ptr = allocator.Allocate(64);
+        REQUIRE(ptr != nullptr);
 
-TEST_CASE("ThreadCachingAllocator Edge Cases")
-{
-    ThreadCachingAllocator allocator;
-    
-    SUBCASE("Zero size allocation")
-    {
-        void* ptr = allocator.Allocate(0);
-        CHECK(ptr == nullptr);
-    }
-    
-    SUBCASE("Null pointer deallocation")
-    {
-        // Should not crash
-        allocator.Deallocate(nullptr);
-    }
-    
-    SUBCASE("Very large allocations")
-    {
-        void* ptr = allocator.Allocate(1024); // 1KB - max supported by allocator design
-        CHECK(ptr != nullptr);
-        
-        // Test that we can write to it
-        char* charPtr = static_cast<char*>(ptr);
-        charPtr[0] = 'A';
-        charPtr[1023] = 'Z';  // Last byte of 1KB
-        
-        CHECK(charPtr[0] == 'A');
-        CHECK(charPtr[1023] == 'Z');
-        
         allocator.Deallocate(ptr);
+        CHECK_NOTHROW(allocator.Deallocate(ptr));
+
+        void* followup = allocator.Allocate(64);
+        REQUIRE(followup != nullptr);
+        allocator.Deallocate(followup);
     }
-    
-    SUBCASE("Rapid allocation/deallocation cycles")
+
+    SUBCASE("duplicate direct frees are ignored")
     {
-        for (int cycle = 0; cycle < 100; ++cycle)
+        void* ptr = allocator.Allocate(ThreadCachingAllocator::kLargeThreshold + 512);
+        REQUIRE(ptr != nullptr);
+
+        allocator.Deallocate(ptr);
+        CHECK_NOTHROW(allocator.Deallocate(ptr));
+
+        void* followup = allocator.Allocate(ThreadCachingAllocator::kLargeThreshold + 768);
+        REQUIRE(followup != nullptr);
+        allocator.Deallocate(followup);
+    }
+
+    SUBCASE("foreign pointers are ignored")
+    {
+        void* foreign = ::operator new(64);
+        CHECK_NOTHROW(allocator.Deallocate(foreign));
+        ::operator delete(foreign);
+    }
+
+    SUBCASE("interior pointers are ignored and do not poison the owning allocation")
+    {
+        void* ptr = allocator.Allocate(64);
+        REQUIRE(ptr != nullptr);
+
+        auto* interior = static_cast<unsigned char*>(ptr) + 1;
+        CHECK_NOTHROW(allocator.Deallocate(interior));
+
+        allocator.Deallocate(ptr);
+        CHECK_NOTHROW(allocator.Deallocate(ptr));
+    }
+}
+
+TEST_CASE("ThreadCachingAllocator remains correct under concurrent allocation traffic")
+{
+    ThreadCachingAllocator allocator;
+    constexpr size_t kThreadCount = 6;
+    constexpr size_t kIterationsPerThread = 200;
+
+    std::atomic<bool> start{false};
+    std::atomic<size_t> successes{0};
+    std::atomic<size_t> failures{0};
+    std::vector<std::thread> threads;
+
+    for (size_t threadIndex = 0; threadIndex < kThreadCount; ++threadIndex)
+    {
+        threads.emplace_back([&, threadIndex]()
         {
-            std::vector<void*> ptrs;
-            
-            // Allocate
-            for (int i = 0; i < 50; ++i)
+            while (!start.load(std::memory_order_acquire))
             {
-                void* ptr = allocator.Allocate(32);
-                if (ptr) ptrs.push_back(ptr);
+                std::this_thread::yield();
             }
-            
-            // Deallocate
-            for (void* ptr : ptrs)
+
+            std::vector<void*> owned;
+            owned.reserve(kIterationsPerThread);
+
+            for (size_t i = 0; i < kIterationsPerThread; ++i)
+            {
+                const size_t requestSize =
+                    (i % 5 == 0)
+                        ? (ThreadCachingAllocator::kLargeThreshold + 128 + threadIndex)
+                        : (32 + ((i + threadIndex) % 8) * 48);
+
+                void* ptr = allocator.Allocate(requestSize);
+                if (!ptr)
+                {
+                    failures.fetch_add(1, std::memory_order_acq_rel);
+                    break;
+                }
+
+                std::memset(ptr, static_cast<int>((threadIndex + i) & 0xFF), requestSize);
+                if (static_cast<unsigned char*>(ptr)[requestSize - 1] !=
+                    static_cast<unsigned char>((threadIndex + i) & 0xFF))
+                {
+                    failures.fetch_add(1, std::memory_order_acq_rel);
+                    break;
+                }
+
+                owned.push_back(ptr);
+            }
+
+            for (void* ptr : owned)
             {
                 allocator.Deallocate(ptr);
             }
-        }
-    }
-}
 
-TEST_CASE("ThreadCachingAllocator Type Safety")
-{
-    ThreadCachingAllocator allocator;
-    
-    SUBCASE("Structured object allocation")
-    {
-        // Test with different object types
-        SmallObject* small = static_cast<SmallObject*>(allocator.Allocate(sizeof(SmallObject)));
-        CHECK(small != nullptr);
-        
-        // Use placement new to properly construct
-        new (small) SmallObject{};
-        CHECK(small->value == 42);
-        
-        small->~SmallObject();
-        allocator.Deallocate(small);
-        
-        // Medium object
-        MediumObject* medium = static_cast<MediumObject*>(allocator.Allocate(sizeof(MediumObject)));
-        CHECK(medium != nullptr);
-        
-        new (medium) MediumObject{};
-        medium->values[0] = 3.14159;
-        CHECK(medium->values[0] == 3.14159);
-        
-        medium->~MediumObject();
-        allocator.Deallocate(medium);
-        
-        // Large object (should use different allocation path)
-        LargeObject* large = static_cast<LargeObject*>(allocator.Allocate(sizeof(LargeObject)));
-        CHECK(large != nullptr);
-        
-        new (large) LargeObject{};
-        large->data[0] = 'X';
-        large->data[sizeof(LargeObject::data) - 1] = 'Y';
-        CHECK(large->data[0] == 'X');
-        CHECK(large->data[sizeof(LargeObject::data) - 1] == 'Y');
-        
-        large->~LargeObject();
-        allocator.Deallocate(large);
+            successes.fetch_add(1, std::memory_order_acq_rel);
+        });
     }
-}
 
-TEST_CASE("ThreadCachingAllocator Direct Malloc Allocations")
-{
-    ThreadCachingAllocator allocator;
-    
-    SUBCASE("Large allocation boundaries")
-    {
-        // Test sizes around the 4KB boundary that triggers direct malloc
-        std::vector<size_t> testSizes = {
-            4096,        // Boundary - should still use pooled LARGE class
-            4097,        // Just over boundary - should use DIRECT
-            5000, 6000, 8192, 10000, 16384, 32768, 65536, 100000, 1024*1024
-        };
-        
-        for (size_t size : testSizes)
-        {
-            INFO("Testing direct allocation of size: " << size);
-            
-            void* ptr = allocator.Allocate(size);
-            CHECK(ptr != nullptr);
-            
-            // Verify we can write to the full allocated size
-            // For direct allocations, we should get exactly what we asked for
-            if (size > 4096)  // Direct allocations
-            {
-                std::memset(ptr, 0xDD, size);
-                
-                // Verify the data was written correctly
-                char* charPtr = static_cast<char*>(ptr);
-                CHECK(charPtr[0] == static_cast<char>(0xDD));
-                CHECK(charPtr[size-1] == static_cast<char>(0xDD));
-            }
-            else  // Pooled allocations
-            {
-                // For pooled allocations, only write up to the pooled size (4KB)
-                std::memset(ptr, 0xDD, 4096);
-            }
-            
-            allocator.Deallocate(ptr);
-        }
-    }
-    
-    SUBCASE("Direct allocation alignment")
-    {
-        // Test alignment for direct allocations
-        std::vector<size_t> sizes = {5000, 8192, 16384, 100000};
-        std::vector<size_t> alignments = {1, 2, 4, 8, 16, 32, 64};
-        
-        for (size_t size : sizes)
-        {
-            for (size_t alignment : alignments)
-            {
-                INFO("Testing direct allocation size " << size << " with alignment " << alignment);
-                
-                void* ptr = allocator.Allocate(size, alignment);
-                CHECK(ptr != nullptr);
-                
-                // Check alignment
-                uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
-                CHECK((addr % alignment) == 0);
-                
-                // Verify we can write to the memory
-                std::memset(ptr, 0xEE, std::min(size, size_t(1000)));
-                
-                allocator.Deallocate(ptr);
-            }
-        }
-    }
-    
-    SUBCASE("Direct allocation pattern verification")
-    {
-        // Allocate multiple large blocks and verify they're properly managed
-        const size_t blockSize = 50000;  // Definitely direct allocation
-        const int numBlocks = 20;
-        
-        std::vector<void*> ptrs;
-        ptrs.reserve(numBlocks);
-        
-        // Allocate blocks
-        for (int i = 0; i < numBlocks; ++i)
-        {
-            void* ptr = allocator.Allocate(blockSize);
-            CHECK(ptr != nullptr);
-            ptrs.push_back(ptr);
-            
-            // Write unique pattern to each block
-            uint32_t* intPtr = static_cast<uint32_t*>(ptr);
-            for (size_t j = 0; j < blockSize / sizeof(uint32_t); ++j)
-            {
-                intPtr[j] = static_cast<uint32_t>(i * 1000 + j);
-            }
-        }
-        
-        // Verify patterns are intact
-        for (int i = 0; i < numBlocks; ++i)
-        {
-            uint32_t* intPtr = static_cast<uint32_t*>(ptrs[i]);
-            for (size_t j = 0; j < 100; ++j)  // Check first 100 integers
-            {
-                CHECK(intPtr[j] == static_cast<uint32_t>(i * 1000 + j));
-            }
-        }
-        
-        // Deallocate in random order
-        std::random_device rd;
-        std::mt19937 g(rd());
-        std::shuffle(ptrs.begin(), ptrs.end(), g);
-        
-        for (void* ptr : ptrs)
-        {
-            allocator.Deallocate(ptr);
-        }
-    }
-    
-    SUBCASE("Mixed pooled and direct allocations")
-    {
-        // Mix small pooled allocations with large direct allocations
-        std::vector<std::pair<void*, size_t>> allocations;
-        
-        // Mix of sizes - some pooled, some direct
-        std::vector<size_t> sizes = {
-            100, 500, 1000, 2000, 4000,     // Pooled allocations
-            5000, 8192, 20000, 100000       // Direct allocations  
-        };
-        
-        // Allocate in mixed pattern
-        for (int round = 0; round < 3; ++round)
-        {
-            for (size_t size : sizes)
-            {
-                void* ptr = allocator.Allocate(size);
-                CHECK(ptr != nullptr);
-                allocations.push_back({ptr, size});
-                
-                // Write pattern based on size
-                char pattern = static_cast<char>(size % 256);
-                std::memset(ptr, pattern, std::min(size, size_t(1000)));
-            }
-        }
-        
-        // Verify all allocations are valid
-        for (const auto& alloc : allocations)
-        {
-            char* ptr = static_cast<char*>(alloc.first);
-            char expectedPattern = static_cast<char>(alloc.second % 256);
-            
-            // Check first and some middle bytes
-            CHECK(ptr[0] == expectedPattern);
-            if (alloc.second > 500)
-            {
-                CHECK(ptr[500] == expectedPattern);
-            }
-        }
-        
-        // Deallocate all
-        for (const auto& alloc : allocations)
-        {
-            allocator.Deallocate(alloc.first);
-        }
-    }
-    
-    SUBCASE("Direct allocation multithreading")
-    {
-        std::atomic<int> errors{0};
-        const int numThreads = 8;
-        const int allocsPerThread = 25;
-        
-        std::vector<std::thread> threads;
-        
-        for (int t = 0; t < numThreads; ++t)
-        {
-            threads.emplace_back([&, t]()
-            {
-                std::vector<void*> ptrs;
-                ptrs.reserve(allocsPerThread);
-                
-                // Each thread allocates large blocks (direct allocations)
-                for (int i = 0; i < allocsPerThread; ++i)
-                {
-                    size_t size = 10000 + (t * 1000) + (i * 100);  // 10KB+ blocks
-                    void* ptr = allocator.Allocate(size);
-                    
-                    if (!ptr)
-                    {
-                        errors.fetch_add(1);
-                        continue;
-                    }
-                    
-                    ptrs.push_back(ptr);
-                    
-                    // Write thread-specific pattern
-                    uint32_t pattern = (t << 16) | i;
-                    uint32_t* intPtr = static_cast<uint32_t*>(ptr);
-                    for (size_t j = 0; j < std::min(size / sizeof(uint32_t), size_t(100)); ++j)
-                    {
-                        intPtr[j] = pattern;
-                    }
-                }
-                
-                // Verify patterns
-                for (size_t i = 0; i < ptrs.size(); ++i)
-                {
-                    uint32_t expectedPattern = (t << 16) | static_cast<uint32_t>(i);
-                    uint32_t* intPtr = static_cast<uint32_t*>(ptrs[i]);
-                    
-                    if (intPtr[0] != expectedPattern || intPtr[50] != expectedPattern)
-                    {
-                        errors.fetch_add(1);
-                    }
-                }
-                
-                // Deallocate all
-                for (void* ptr : ptrs)
-                {
-                    allocator.Deallocate(ptr);
-                }
-            });
-        }
-        
-        // Wait for all threads to complete
-        for (auto& thread : threads)
-        {
-            thread.join();
-        }
-        
-        CHECK(errors.load() == 0);
-    }
-}
+    start.store(true, std::memory_order_release);
 
-TEST_CASE("ThreadCachingAllocator Multiple Instances")
-{
-    SUBCASE("Independent allocator instances")
+    for (auto& thread : threads)
     {
-        // Create two separate allocator instances
-        ThreadCachingAllocator allocator1;
-        ThreadCachingAllocator allocator2;
-        
-        // Test that they work independently
-        void* ptr1 = allocator1.Allocate(64);
-        void* ptr2 = allocator2.Allocate(64);
-        
-        CHECK(ptr1 != nullptr);
-        CHECK(ptr2 != nullptr);
-        CHECK(ptr1 != ptr2);  // Should be different allocations
-        
-        // Write different patterns
-        *static_cast<int*>(ptr1) = 0xAAAA;
-        *static_cast<int*>(ptr2) = 0xBBBB;
-        
-        CHECK(*static_cast<int*>(ptr1) == 0xAAAA);
-        CHECK(*static_cast<int*>(ptr2) == 0xBBBB);
-        
-        // Clean up
-        allocator1.Deallocate(ptr1);
-        allocator2.Deallocate(ptr2);
-        
-        // Verify that both allocators worked independently
-        // Since we can't check total allocated size, we just verify the allocations succeeded
-        INFO("Both allocators worked independently");
+        thread.join();
     }
-    
-    SUBCASE("Multi-threaded with multiple instances")
-    {
-        ThreadCachingAllocator allocator1;
-        ThreadCachingAllocator allocator2;
-        
-        constexpr size_t numThreads = 4;
-        constexpr size_t allocsPerThread = 100;
-        
-        std::atomic<size_t> successCount1{0};
-        std::atomic<size_t> successCount2{0};
-        
-        std::vector<std::thread> threads;
-        
-        for (size_t t = 0; t < numThreads; ++t)
-        {
-            threads.emplace_back([&, t]()
-            {
-                std::vector<void*> ptrs1, ptrs2;
-                
-                // Allocate from both allocators
-                for (size_t i = 0; i < allocsPerThread; ++i)
-                {
-                    void* ptr1 = allocator1.Allocate(32);
-                    void* ptr2 = allocator2.Allocate(32);
-                    
-                    if (ptr1)
-                    {
-                        ptrs1.push_back(ptr1);
-                        *static_cast<size_t*>(ptr1) = t * 1000 + i;
-                    }
-                    
-                    if (ptr2)
-                    {
-                        ptrs2.push_back(ptr2);
-                        *static_cast<size_t*>(ptr2) = (t + 10) * 1000 + i;
-                    }
-                }
-                
-                // Verify data integrity
-                for (size_t i = 0; i < ptrs1.size(); ++i)
-                {
-                    if (*static_cast<size_t*>(ptrs1[i]) == t * 1000 + i)
-                        successCount1.fetch_add(1);
-                }
-                
-                for (size_t i = 0; i < ptrs2.size(); ++i)
-                {
-                    if (*static_cast<size_t*>(ptrs2[i]) == (t + 10) * 1000 + i)
-                        successCount2.fetch_add(1);
-                }
-                
-                // Clean up
-                for (void* ptr : ptrs1)
-                    allocator1.Deallocate(ptr);
-                for (void* ptr : ptrs2)
-                    allocator2.Deallocate(ptr);
-            });
-        }
-        
-        for (auto& thread : threads)
-            thread.join();
-        
-        CHECK(successCount1.load() == numThreads * allocsPerThread);
-        CHECK(successCount2.load() == numThreads * allocsPerThread);
-        
-        INFO("Allocator1 successful allocations: " << successCount1.load());
-        INFO("Allocator2 successful allocations: " << successCount2.load());
-    }
+
+    CHECK(failures.load(std::memory_order_acquire) == 0);
+    CHECK(successes.load(std::memory_order_acquire) == kThreadCount);
 }

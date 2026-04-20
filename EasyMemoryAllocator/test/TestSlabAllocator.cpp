@@ -2,302 +2,300 @@
 #include "doctest/doctest.h"
 #include "EAllocKit/SlabAllocator.hpp"
 
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <limits>
+#include <new>
+#include <stdexcept>
+#include <unordered_set>
+#include <vector>
+
 using namespace EAllocKit;
 
-TEST_CASE("SlabAllocator - Basic Allocation")
+TEST_CASE("SlabAllocator - requested size and slot size are reported separately")
 {
-    SlabAllocator allocator(64, 32, 8);
-    
-    SUBCASE("Single allocation")
+    SlabAllocator allocator(64, 8, 8);
+
+    CHECK(allocator.GetObjectSize() == 64);
+    CHECK(allocator.GetRequestedObjectSize() == 64);
+    CHECK(allocator.GetSlotSize() >= 64);
+    CHECK(allocator.GetSlotSize() % alignof(std::max_align_t) == 0);
+    CHECK(allocator.GetObjectsPerSlab() == 8);
+    CHECK(allocator.GetTotalSlabs() == 1);
+
+    void* first = allocator.Allocate();
+    void* second = allocator.Allocate(64);
+    REQUIRE(first != nullptr);
+    REQUIRE(second != nullptr);
+    CHECK(allocator.GetTotalAllocations() == 2);
+    CHECK(allocator.Allocate(65) == nullptr);
+
+    allocator.Deallocate(first);
+    allocator.Deallocate(second);
+    CHECK(allocator.GetTotalAllocations() == 0);
+}
+
+TEST_CASE("SlabAllocator - very small object sizes still produce usable distinct slots")
+{
+    SlabAllocator allocator(1, 4, 1);
+    std::vector<void*> allocations;
+    std::unordered_set<void*> uniquePointers;
+
+    CHECK(allocator.GetRequestedObjectSize() == 1);
+    CHECK(allocator.GetSlotSize() >= sizeof(void*));
+
+    for (int i = 0; i < 4; ++i)
     {
+        void* ptr = allocator.Allocate(1);
+        REQUIRE(ptr != nullptr);
+        CHECK(uniquePointers.insert(ptr).second);
+        allocations.push_back(ptr);
+    }
+
+    CHECK(allocator.GetTotalAllocations() == allocations.size());
+
+    for (void* ptr : allocations)
+        allocator.Deallocate(ptr);
+
+    CHECK(allocator.GetTotalAllocations() == 0);
+}
+
+TEST_CASE("SlabAllocator - Allocate(0) is rejected without consuming a slot")
+{
+    SlabAllocator allocator(32, 4, 8);
+
+    CHECK(allocator.Allocate(0) == nullptr);
+    CHECK(allocator.Allocate(0, alignof(std::max_align_t)) == nullptr);
+    CHECK(allocator.GetTotalAllocations() == 0);
+
+    void* ptr = allocator.Allocate();
+    REQUIRE(ptr != nullptr);
+    CHECK(allocator.GetTotalAllocations() == 1);
+
+    allocator.Deallocate(ptr);
+    CHECK(allocator.GetTotalAllocations() == 0);
+}
+
+TEST_CASE("SlabAllocator - live allocations remain unique across free patterns")
+{
+    SlabAllocator allocator(64, 8, 8);
+    std::vector<void*> live;
+    std::unordered_set<void*> liveSet;
+
+    auto trackLiveAllocation = [&]() {
         void* ptr = allocator.Allocate();
-        CHECK(ptr != nullptr);
-        CHECK(allocator.GetTotalAllocations() == 1);
-        allocator.Deallocate(ptr);
-        CHECK(allocator.GetTotalAllocations() == 0);
-    }
-    
-    SUBCASE("Multiple allocations")
-    {
-        void* ptr1 = allocator.Allocate();
-        void* ptr2 = allocator.Allocate();
-        void* ptr3 = allocator.Allocate();
-        
-        CHECK(ptr1 != nullptr);
-        CHECK(ptr2 != nullptr);
-        CHECK(ptr3 != nullptr);
-        CHECK(allocator.GetTotalAllocations() == 3);
-        
-        allocator.Deallocate(ptr1);
-        allocator.Deallocate(ptr2);
-        allocator.Deallocate(ptr3);
-        CHECK(allocator.GetTotalAllocations() == 0);
-    }
-}
-
-TEST_CASE("SlabAllocator - Object Size")
-{
-    SlabAllocator allocator(128, 16, 8);
-    
-    SUBCASE("Check object size")
-    {
-        CHECK(allocator.GetObjectSize() >= 128);
-        CHECK(allocator.GetObjectsPerSlab() == 16);
-    }
-}
-
-TEST_CASE("SlabAllocator - Slab Expansion")
-{
-    SlabAllocator allocator(64, 8, 8);  // 8 objects per slab
-    
-    SUBCASE("Allocate more than one slab")
-    {
-        std::vector<void*> allocations;
-        
-        // Initial slab count
-        size_t initialSlabs = allocator.GetTotalSlabs();
-        CHECK(initialSlabs >= 1);
-        
-        // Allocate 20 objects (more than one slab)
-        for (int i = 0; i < 20; ++i)
-        {
-            void* ptr = allocator.Allocate();
-            CHECK(ptr != nullptr);
-            allocations.push_back(ptr);
-        }
-        
-        // Should have allocated more slabs
-        CHECK(allocator.GetTotalSlabs() > initialSlabs);
-        CHECK(allocator.GetTotalAllocations() == 20);
-        
-        // Clean up
-        for (void* ptr : allocations)
-            allocator.Deallocate(ptr);
-            
-        CHECK(allocator.GetTotalAllocations() == 0);
-    }
-}
-
-TEST_CASE("SlabAllocator - Reuse After Deallocation")
-{
-    SlabAllocator allocator(64, 32, 8);
-    
-    SUBCASE("Allocate, deallocate, and reallocate")
-    {
-        void* ptr1 = allocator.Allocate();
-        CHECK(ptr1 != nullptr);
-        
-        allocator.Deallocate(ptr1);
-        CHECK(allocator.GetTotalAllocations() == 0);
-        
-        // Should reuse the freed object
-        void* ptr2 = allocator.Allocate();
-        CHECK(ptr2 != nullptr);
-        CHECK(ptr2 == ptr1);  // Should get the same memory back
-        
-        allocator.Deallocate(ptr2);
-    }
-}
-
-TEST_CASE("SlabAllocator - Size Variants")
-{
-    SUBCASE("Small objects (16 bytes)")
-    {
-        SlabAllocator allocator(16, 32, 8);  // 16字节对象
-        void* ptr = allocator.Allocate();
-        CHECK(ptr != nullptr);
-        CHECK(allocator.GetObjectSize() >= 16);
-        allocator.Deallocate(ptr);
-    }
-    
-    SUBCASE("Medium objects (256 bytes)")
-    {
-        SlabAllocator allocator(256, 16, 8);  // 256字节对象
-        void* ptr = allocator.Allocate();
-        CHECK(ptr != nullptr);
-        CHECK(allocator.GetObjectSize() >= 256);
-        allocator.Deallocate(ptr);
-    }
-    
-    SUBCASE("Large objects (1024 bytes)")
-    {
-        SlabAllocator allocator(1024, 8, 8);  // 1024字节对象
-        void* ptr = allocator.Allocate();
-        CHECK(ptr != nullptr);
-        CHECK(allocator.GetObjectSize() >= 1024);
-        allocator.Deallocate(ptr);
-    }
-}
-
-TEST_CASE("SlabAllocator - Allocate with Size Parameter")
-{
-    SlabAllocator allocator(64, 32, 8);
-    
-    SUBCASE("Allocate with size <= object size")
-    {
-        void* ptr = allocator.Allocate(50);
-        CHECK(ptr != nullptr);
-        allocator.Deallocate(ptr);
-    }
-    
-    SUBCASE("Allocate with size > object size")
-    {
-        void* ptr = allocator.Allocate(200);
-        CHECK(ptr == nullptr);  // Should fail
-    }
-}
-
-TEST_CASE("SlabAllocator - Allocate with Alignment")
-{
-    SlabAllocator allocator(128, 16, 16);
-    
-    SUBCASE("Allocate with matching alignment")
-    {
-        void* ptr = allocator.Allocate(100, 16);
-        CHECK(ptr != nullptr);
-        CHECK(reinterpret_cast<uintptr_t>(ptr) % 16 == 0);
-        allocator.Deallocate(ptr);
-    }
-    
-    SUBCASE("Allocate with larger alignment")
-    {
-        void* ptr = allocator.Allocate(100, 32);
-        CHECK(ptr == nullptr);  // Should fail due to alignment requirement > DefaultAlignment
-    }
-}
-
-TEST_CASE("SlabAllocator - Edge Cases")
-{
-    SlabAllocator allocator(64, 32, 8);
-    
-    SUBCASE("Null pointer deallocation")
-    {
-        allocator.Deallocate(nullptr);
-        // Should not crash
-        CHECK(true);
-    }
-    
-    SUBCASE("Invalid pointer deallocation")
-    {
-        int localVar = 42;
-        allocator.Deallocate(&localVar);
-        // Should handle gracefully
-        CHECK(true);
-    }
-}
-
-TEST_CASE("SlabAllocator - Object Construction")
-{
-    SlabAllocator allocator(64, 32, 8);
-    
-    SUBCASE("Allocate and construct objects")
-    {
-        struct TestObject
-        {
-            int id;
-            double value;
-            char name[32];
-            
-            TestObject(int i, double v) : id(i), value(v)
-            {
-                std::snprintf(name, sizeof(name), "Object_%d", i);
-            }
-        };
-        
-        void* memory = allocator.Allocate();
-        CHECK(memory != nullptr);
-        
-        TestObject* obj = new (memory) TestObject(42, 3.14);
-        CHECK(obj->id == 42);
-        CHECK(obj->value == doctest::Approx(3.14));
-        
-        obj->~TestObject();
-        allocator.Deallocate(memory);
-    }
-}
-
-TEST_CASE("SlabAllocator - Stress Test")
-{
-    SlabAllocator allocator(64, 32, 8);
-    
-    SUBCASE("Many allocations and deallocations")
-    {
-        std::vector<void*> allocations;
-        
-        // Allocate 100 objects
-        for (int i = 0; i < 100; ++i)
-        {
-            void* ptr = allocator.Allocate();
-            CHECK(ptr != nullptr);
-            allocations.push_back(ptr);
-        }
-        
-        CHECK(allocator.GetTotalAllocations() == 100);
-        
-        // Deallocate every other one
-        for (size_t i = 0; i < allocations.size(); i += 2)
-        {
-            allocator.Deallocate(allocations[i]);
-        }
-        
-        CHECK(allocator.GetTotalAllocations() == 50);
-        
-        // Reallocate
-        for (size_t i = 0; i < 50; ++i)
-        {
-            void* ptr = allocator.Allocate();
-            CHECK(ptr != nullptr);
-        }
-        
-        CHECK(allocator.GetTotalAllocations() == 100);
-        
-        // Clean up
-        for (size_t i = 1; i < allocations.size(); i += 2)
-        {
-            allocator.Deallocate(allocations[i]);
-        }
-        
-        for (size_t i = 0; i < 50; ++i)
-        {
-            allocator.Deallocate(allocations.back());
-            allocations.pop_back();
-        }
-    }
-}
-
-TEST_CASE("SlabAllocator - Memory Pool Pattern")
-{
-    struct IntWrapper
-    {
-        int value;
-        char padding[4];  // Ensure size is at least sizeof(void*)
-        IntWrapper(int v) : value(v) {}
+        REQUIRE(ptr != nullptr);
+        CHECK(liveSet.insert(ptr).second);
+        live.push_back(ptr);
     };
-    
-    SUBCASE("Use as object pool")
+
+    for (int i = 0; i < 40; ++i)
+        trackLiveAllocation();
+
+    CHECK(allocator.GetTotalSlabs() > 1);
+    CHECK(allocator.GetTotalAllocations() == live.size());
+
+    std::vector<void*> survivors;
+    size_t freedCount = 0;
+    for (size_t i = 0; i < live.size(); ++i)
     {
-        SlabAllocator allocator(sizeof(IntWrapper), 64);
-        std::vector<IntWrapper*> numbers;
-        
-        // Allocate and construct objects
-        for (int i = 0; i < 20; ++i)
+        if ((i % 3) == 0)
         {
-            void* memory = allocator.Allocate();
-            IntWrapper* num = new (memory) IntWrapper(i * 10);
-            numbers.push_back(num);
+            allocator.Deallocate(live[i]);
+            CHECK(liveSet.erase(live[i]) == 1);
+            ++freedCount;
+            continue;
         }
-        
-        // Verify values
-        for (size_t i = 0; i < numbers.size(); ++i)
-        {
-            CHECK(numbers[i]->value == static_cast<int>(i * 10));
-        }
-        
-        // Clean up
-        for (IntWrapper* num : numbers)
-        {
-            num->~IntWrapper();
-            allocator.Deallocate(num);
-        }
+
+        survivors.push_back(live[i]);
     }
+
+    live.swap(survivors);
+    CHECK(allocator.GetTotalAllocations() == live.size());
+
+    for (size_t i = 0; i < freedCount; ++i)
+        trackLiveAllocation();
+
+    CHECK(allocator.GetTotalAllocations() == live.size());
+    CHECK(liveSet.size() == live.size());
+
+    for (void* ptr : live)
+        allocator.Deallocate(ptr);
+
+    CHECK(allocator.GetTotalAllocations() == 0);
+}
+
+TEST_CASE("SlabAllocator - invalid frees throw and do not corrupt reuse")
+{
+    SlabAllocator allocator(64, 2, 8);
+    SlabAllocator other(64, 2, 8);
+
+    void* first = allocator.Allocate();
+    void* second = allocator.Allocate();
+    void* foreign = other.Allocate();
+    REQUIRE(first != nullptr);
+    REQUIRE(second != nullptr);
+    REQUIRE(foreign != nullptr);
+    CHECK(first != second);
+    CHECK(allocator.GetTotalAllocations() == 2);
+
+    allocator.Deallocate(first);
+    CHECK(allocator.GetTotalAllocations() == 1);
+
+    CHECK_THROWS_AS(allocator.Deallocate(first), std::invalid_argument);
+    CHECK(allocator.GetTotalAllocations() == 1);
+
+    int stackValue = 42;
+    CHECK_THROWS_AS(allocator.Deallocate(&stackValue), std::invalid_argument);
+    CHECK(allocator.GetTotalAllocations() == 1);
+
+    void* heapPointer = ::operator new(64);
+    CHECK_THROWS_AS(allocator.Deallocate(heapPointer), std::invalid_argument);
+    ::operator delete(heapPointer);
+    CHECK(allocator.GetTotalAllocations() == 1);
+
+    CHECK_THROWS_AS(allocator.Deallocate(foreign), std::invalid_argument);
+    CHECK(allocator.GetTotalAllocations() == 1);
+
+    auto interior = reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(second) + 1);
+    CHECK_THROWS_AS(allocator.Deallocate(interior), std::invalid_argument);
+    CHECK(allocator.GetTotalAllocations() == 1);
+
+    void* reused = allocator.Allocate();
+    REQUIRE(reused != nullptr);
+    CHECK(reused == first);
+    CHECK(allocator.GetTotalAllocations() == 2);
+
+    allocator.Deallocate(second);
+    allocator.Deallocate(reused);
+    CHECK(allocator.GetTotalAllocations() == 0);
+
+    other.Deallocate(foreign);
+    CHECK(other.GetTotalAllocations() == 0);
+}
+
+TEST_CASE("SlabAllocator - free list integrity survives slab expansion and reuse")
+{
+    SlabAllocator allocator(24, 3, 8);
+    std::vector<void*> allocations;
+
+    for (int i = 0; i < 10; ++i)
+    {
+        void* ptr = allocator.Allocate();
+        REQUIRE(ptr != nullptr);
+        allocations.push_back(ptr);
+    }
+
+    const size_t expandedSlabCount = allocator.GetTotalSlabs();
+    REQUIRE(expandedSlabCount > 1);
+    CHECK(allocator.GetTotalAllocations() == allocations.size());
+
+    std::unordered_set<void*> liveSet(allocations.begin(), allocations.end());
+    std::unordered_set<void*> freedSet;
+    const std::vector<size_t> releaseIndices = {0, 2, 3, 6, 9};
+
+    for (size_t index : releaseIndices)
+    {
+        allocator.Deallocate(allocations[index]);
+        CHECK(liveSet.erase(allocations[index]) == 1);
+        CHECK(freedSet.insert(allocations[index]).second);
+    }
+
+    CHECK(allocator.GetTotalAllocations() == allocations.size() - releaseIndices.size());
+
+    for (size_t i = 0; i < releaseIndices.size(); ++i)
+    {
+        void* ptr = allocator.Allocate();
+        REQUIRE(ptr != nullptr);
+        CHECK(freedSet.erase(ptr) == 1);
+        CHECK(liveSet.insert(ptr).second);
+    }
+
+    CHECK(freedSet.empty());
+    CHECK(allocator.GetTotalAllocations() == allocations.size());
+    CHECK(allocator.GetTotalSlabs() == expandedSlabCount);
+    CHECK(liveSet.size() == allocations.size());
+
+    for (void* ptr : liveSet)
+        allocator.Deallocate(ptr);
+
+    CHECK(allocator.GetTotalAllocations() == 0);
+}
+
+TEST_CASE("SlabAllocator - alignment support is real and unsupported requests fail cleanly")
+{
+    SUBCASE("default allocations are max-align safe")
+    {
+        SlabAllocator allocator(sizeof(std::max_align_t), 4, 8);
+        void* ptr = allocator.Allocate();
+        REQUIRE(ptr != nullptr);
+        CHECK(reinterpret_cast<std::uintptr_t>(ptr) % alignof(std::max_align_t) == 0);
+        allocator.Deallocate(ptr);
+    }
+
+    SUBCASE("configured over-alignment is honored")
+    {
+        struct alignas(64) OverAligned
+        {
+            std::uint64_t words[8];
+        };
+
+        SlabAllocator allocator(sizeof(OverAligned), 4, alignof(OverAligned));
+        void* ptr = allocator.Allocate(sizeof(OverAligned), alignof(OverAligned));
+        REQUIRE(ptr != nullptr);
+        CHECK(reinterpret_cast<std::uintptr_t>(ptr) % alignof(OverAligned) == 0);
+        allocator.Deallocate(ptr);
+    }
+
+    SUBCASE("unsupported or invalid alignment requests return nullptr")
+    {
+        SlabAllocator allocator(64, 4, 32);
+        CHECK(allocator.Allocate(64, 64) == nullptr);
+        CHECK(allocator.Allocate(64, 24) == nullptr);
+        CHECK(allocator.Allocate(64, 0) == nullptr);
+        CHECK(allocator.Allocate(0, 32) == nullptr);
+    }
+}
+
+TEST_CASE("SlabAllocator - constructor rejects invalid and overflowing configurations")
+{
+    CHECK_THROWS_AS(SlabAllocator(0, 4, 8), std::invalid_argument);
+    CHECK_THROWS_AS(SlabAllocator(16, 0, 8), std::invalid_argument);
+    CHECK_THROWS_AS(SlabAllocator(16, 4, 3), std::invalid_argument);
+    CHECK_THROWS_AS(SlabAllocator(std::numeric_limits<size_t>::max(), 1, 8), std::overflow_error);
+
+    const size_t slotAlignment = alignof(std::max_align_t);
+    const size_t overflowingObjectsPerSlab =
+        (std::numeric_limits<size_t>::max() / slotAlignment) + 1;
+    CHECK_THROWS_AS(SlabAllocator(1, overflowingObjectsPerSlab, slotAlignment), std::overflow_error);
+}
+
+TEST_CASE("SlabAllocator - placement new remains usable for typed objects")
+{
+    struct TestObject
+    {
+        int id;
+        double value;
+        char name[32];
+
+        TestObject(int inId, double inValue)
+            : id(inId)
+            , value(inValue)
+        {
+            std::snprintf(name, sizeof(name), "Object_%d", inId);
+        }
+    };
+
+    SlabAllocator allocator(sizeof(TestObject), 8, alignof(TestObject));
+    void* memory = allocator.Allocate(sizeof(TestObject), alignof(TestObject));
+    REQUIRE(memory != nullptr);
+
+    TestObject* object = new (memory) TestObject(42, 3.14);
+    CHECK(object->id == 42);
+    CHECK(object->value == doctest::Approx(3.14));
+
+    object->~TestObject();
+    allocator.Deallocate(memory);
+    CHECK(allocator.GetTotalAllocations() == 0);
 }

@@ -1,15 +1,47 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
 #include "EAllocKit/ArenaAllocator.hpp"
+#include <cstdint>
+#include <limits>
 #include <vector>
 #include "Helper.h"
 
 using namespace EAllocKit;
 
+namespace
+{
+    constexpr size_t kSafeTypedAlignment = alignof(std::max_align_t);
+}
+
+struct LifetimeProbe {
+    static int constructions;
+    static int destructions;
+
+    int value;
+
+    explicit LifetimeProbe(int v = 0) : value(v) { ++constructions; }
+    ~LifetimeProbe() { ++destructions; }
+
+    static void ResetCounts()
+    {
+        constructions = 0;
+        destructions = 0;
+    }
+};
+
+int LifetimeProbe::constructions = 0;
+int LifetimeProbe::destructions = 0;
+
 // Test structs for allocation tests
 struct TestObject {
     int value;
     TestObject(int v = 42) : value(v) {}
+};
+
+struct MaxAlignedObject {
+    alignas(std::max_align_t) unsigned char storage[sizeof(std::max_align_t)];
+    int value;
+    MaxAlignedObject(int v = 77) : storage{}, value(v) {}
 };
 
 struct AlignedObject {
@@ -100,14 +132,31 @@ TEST_CASE("ArenaAllocator Typed Allocation")
         CHECK(obj != nullptr);
         CHECK(obj->value == 999);
     }
-    
+
+    SUBCASE("Default path is safe for ordinary typed allocation") {
+        MaxAlignedObject* obj = New<MaxAlignedObject>(arena, 321);
+        REQUIRE(obj != nullptr);
+        CHECK(reinterpret_cast<std::uintptr_t>(obj) % alignof(MaxAlignedObject) == 0);
+        CHECK(obj->value == 321);
+    }
+
     SUBCASE("Aligned object allocation") {
         void* ptr = arena.Allocate(sizeof(AlignedObject), 64);
         CHECK(ptr != nullptr);
-        CHECK(reinterpret_cast<uintptr_t>(ptr) % 64 == 0);
+        CHECK(reinterpret_cast<std::uintptr_t>(ptr) % 64 == 0);
         // Construct object in place
         AlignedObject* obj = new (AllocatorMarker(), ptr) AlignedObject();
         CHECK(obj->value == 100);
+    }
+
+    SUBCASE("Over-aligned allocations require explicit alignment for a guarantee") {
+        void* default_ptr = arena.Allocate(sizeof(AlignedObject));
+        REQUIRE(default_ptr != nullptr);
+        CHECK(reinterpret_cast<std::uintptr_t>(default_ptr) % kSafeTypedAlignment == 0);
+
+        void* explicit_ptr = arena.Allocate(sizeof(AlignedObject), alignof(AlignedObject));
+        REQUIRE(explicit_ptr != nullptr);
+        CHECK(reinterpret_cast<std::uintptr_t>(explicit_ptr) % alignof(AlignedObject) == 0);
     }
 }
 
@@ -196,7 +245,7 @@ TEST_CASE("ArenaAllocator Checkpoint and Restore")
         
         // Restore to level 0
         arena.RestoreCheckpoint(cp1);
-        CHECK(arena.GetUsedBytes() <= 100 + 8); // ptr1 + padding
+        CHECK(arena.GetUsedBytes() <= 100 + kSafeTypedAlignment); // ptr1 + padding
         
         // Should be able to allocate from level 0
         void* ptr5 = arena.Allocate(400);
@@ -209,6 +258,32 @@ TEST_CASE("ArenaAllocator Checkpoint and Restore")
         
         arena.RestoreCheckpoint(invalid_cp); // Should not crash
         CHECK(arena.IsEmpty()); // Should remain unchanged
+    }
+
+    SUBCASE("Forward restore attempts are ignored") {
+        void* first = arena.Allocate(32);
+        REQUIRE(first != nullptr);
+
+        auto rewind_target = arena.SaveCheckpoint();
+        const size_t rewind_used = arena.GetUsedBytes();
+        void* rewind_ptr = arena.GetCurrentPtr();
+
+        void* second = arena.Allocate(48);
+        REQUIRE(second != nullptr);
+
+        auto forward_checkpoint = arena.SaveCheckpoint();
+        arena.Allocate(16);
+
+        arena.RestoreCheckpoint(rewind_target);
+        CHECK(arena.GetUsedBytes() == rewind_used);
+        CHECK(arena.GetCurrentPtr() == rewind_ptr);
+
+        arena.RestoreCheckpoint(forward_checkpoint);
+        CHECK(arena.GetUsedBytes() == rewind_used);
+        CHECK(arena.GetCurrentPtr() == rewind_ptr);
+
+        void* second_again = arena.Allocate(48);
+        CHECK(second_again == second);
     }
 }
 
@@ -265,7 +340,7 @@ TEST_CASE("ArenaAllocator Scope Guard")
             // scope1 destructs here
         }
         
-        CHECK(arena.GetUsedBytes() <= 100 + 8); // Back to ptr1 + padding
+        CHECK(arena.GetUsedBytes() <= 100 + kSafeTypedAlignment); // Back to ptr1 + padding
     }
     
     SUBCASE("Scope guard release") {
@@ -328,30 +403,185 @@ TEST_CASE("ArenaAllocator Memory Information and Statistics")
         void* current_after = arena.GetCurrentPtr();
         
         CHECK(current_after != current_initial);
-        CHECK(current_after > base);
+        CHECK(reinterpret_cast<std::uintptr_t>(current_after) > reinterpret_cast<std::uintptr_t>(base));
+    }
+}
+
+TEST_CASE("ArenaAllocator Defensive Contracts")
+{
+    SUBCASE("Huge allocation requests are rejected without changing state") {
+        ArenaAllocator arena(256, 8);
+
+        CHECK(arena.Allocate(std::numeric_limits<size_t>::max()) == nullptr);
+        CHECK(arena.GetUsedBytes() == 0);
+        CHECK(arena.GetRemainingBytes() == arena.GetCapacity());
+    }
+
+    SUBCASE("Huge alignment padding requests are rejected without overflow") {
+        ArenaAllocator arena(256, 8);
+        const size_t huge_alignment = size_t{1} << (std::numeric_limits<size_t>::digits - 1);
+
+        CHECK(arena.Allocate(32, huge_alignment) == nullptr);
+        CHECK(arena.GetUsedBytes() == 0);
+    }
+
+    SUBCASE("Self-consistent checkpoints from another allocator are rejected") {
+        ArenaAllocator arena_a(256, 8);
+        ArenaAllocator arena_b(256, 8);
+
+        void* first_a = arena_a.Allocate(32);
+        REQUIRE(first_a != nullptr);
+        void* second_a = arena_a.Allocate(64);
+        REQUIRE(second_a != nullptr);
+
+        void* first_b = arena_b.Allocate(32);
+        REQUIRE(first_b != nullptr);
+        auto foreign_checkpoint = arena_b.SaveCheckpoint();
+
+        const size_t used_before = arena_a.GetUsedBytes();
+        const void* current_before = arena_a.GetCurrentPtr();
+        arena_a.RestoreCheckpoint(foreign_checkpoint);
+
+        CHECK(arena_a.GetUsedBytes() == used_before);
+        CHECK(arena_a.GetCurrentPtr() == current_before);
+    }
+
+    SUBCASE("Reset invalidates older checkpoints from the same allocator") {
+        ArenaAllocator arena(256, 8);
+        void* first = arena.Allocate(32);
+        REQUIRE(first != nullptr);
+
+        auto old_checkpoint = arena.SaveCheckpoint();
+        arena.Allocate(32);
+        arena.Reset();
+
+        void* after_reset = arena.Allocate(24);
+        REQUIRE(after_reset != nullptr);
+
+        const size_t used_before = arena.GetUsedBytes();
+        arena.RestoreCheckpoint(old_checkpoint);
+
+        CHECK(arena.GetUsedBytes() == used_before);
+    }
+
+    SUBCASE("Range checks treat base as inside and end as outside") {
+        ArenaAllocator arena(256, 8);
+
+        const auto base_address = reinterpret_cast<std::uintptr_t>(arena.GetMemoryBlockPtr());
+        const auto end_address = base_address + arena.GetCapacity();
+
+        CHECK(arena.ContainsPointer(reinterpret_cast<void*>(base_address)));
+        CHECK_FALSE(arena.ContainsPointer(reinterpret_cast<void*>(end_address)));
+    }
+
+    SUBCASE("Restore and reset reproduce prior allocation positions") {
+        ArenaAllocator arena(256, 8);
+
+        void* first = arena.Allocate(32);
+        REQUIRE(first != nullptr);
+
+        auto checkpoint = arena.SaveCheckpoint();
+        const size_t used_at_checkpoint = arena.GetUsedBytes();
+        void* checkpoint_ptr = arena.GetCurrentPtr();
+
+        void* second = arena.Allocate(48);
+        REQUIRE(second != nullptr);
+        CHECK(arena.GetUsedBytes() > used_at_checkpoint);
+
+        arena.Allocate(16);
+        arena.RestoreCheckpoint(checkpoint);
+
+        CHECK(arena.GetUsedBytes() == used_at_checkpoint);
+        CHECK(arena.GetCurrentPtr() == checkpoint_ptr);
+
+        void* second_again = arena.Allocate(48);
+        CHECK(second_again == second);
+
+        arena.Reset();
+        CHECK(arena.GetCurrentPtr() == arena.GetMemoryBlockPtr());
+
+        void* first_again = arena.Allocate(32);
+        CHECK(first_again == first);
+    }
+
+    SUBCASE("Large default alignment uses aligned backing storage") {
+        ArenaAllocator arena(128, 64);
+
+        CHECK(reinterpret_cast<std::uintptr_t>(arena.GetMemoryBlockPtr()) % 64 == 0);
+
+        void* first = arena.Allocate(64);
+        REQUIRE(first != nullptr);
+        CHECK(reinterpret_cast<std::uintptr_t>(first) % 64 == 0);
+        CHECK(arena.GetUsedBytes() == 64);
+
+        void* second = arena.Allocate(64);
+        REQUIRE(second != nullptr);
+        CHECK(second == static_cast<uint8_t*>(first) + 64);
+        CHECK(arena.IsFull());
+    }
+
+    SUBCASE("IsFull only reports total exhaustion, not default-alignment exhaustion") {
+        ArenaAllocator arena(64, 64);
+
+        void* first = arena.Allocate(1);
+        REQUIRE(first != nullptr);
+        CHECK_FALSE(arena.IsFull());
+
+        CHECK(arena.Allocate(1) == nullptr);
+
+        void* tail = arena.Allocate(1, 1);
+        REQUIRE(tail != nullptr);
+        CHECK(tail == static_cast<uint8_t*>(first) + 1);
+        CHECK_FALSE(arena.IsFull());
     }
 }
 
 TEST_CASE("ArenaAllocator Deallocation No-Op")
 {
-    ArenaAllocator arena(1024, 8);
-    
-    void* ptr1 = arena.Allocate(100);
-    void* ptr2 = arena.Allocate(200);
-    
-    size_t used_before = arena.GetUsedBytes();
-    
-    // Deallocate should be no-op
-    arena.Deallocate(ptr1);
-    arena.Deallocate(ptr2);
-    arena.Deallocate(nullptr);
-    
-    // Nothing should change
-    CHECK(arena.GetUsedBytes() == used_before);
-    
-    // Pointers should still be valid (arena memory unchanged)
-    CHECK(arena.ContainsPointer(ptr1));
-    CHECK(arena.ContainsPointer(ptr2));
+    SUBCASE("Individual deallocation never rewinds arena state") {
+        ArenaAllocator arena(1024, 8);
+        
+        void* ptr1 = arena.Allocate(100);
+        void* ptr2 = arena.Allocate(200);
+        
+        size_t used_before = arena.GetUsedBytes();
+        
+        arena.Deallocate(ptr1);
+        arena.Deallocate(ptr2);
+        arena.Deallocate(nullptr);
+        
+        CHECK(arena.GetUsedBytes() == used_before);
+        CHECK(arena.ContainsPointer(ptr1));
+        CHECK(arena.ContainsPointer(ptr2));
+    }
+
+    SUBCASE("Reset and restore do not run non-trivial destructors for you") {
+        LifetimeProbe::ResetCounts();
+
+        ArenaAllocator arena(1024, 8);
+        auto* first = New<LifetimeProbe>(arena, 11);
+        REQUIRE(first != nullptr);
+
+        auto checkpoint = arena.SaveCheckpoint();
+        auto* second = New<LifetimeProbe>(arena, 22);
+        REQUIRE(second != nullptr);
+
+        CHECK(LifetimeProbe::constructions == 2);
+        CHECK(LifetimeProbe::destructions == 0);
+
+        arena.Deallocate(second);
+        CHECK(LifetimeProbe::destructions == 0);
+
+        arena.RestoreCheckpoint(checkpoint);
+        CHECK(LifetimeProbe::destructions == 0);
+
+        arena.Reset();
+        CHECK(LifetimeProbe::destructions == 0);
+
+        second->~LifetimeProbe();
+        first->~LifetimeProbe();
+        CHECK(LifetimeProbe::destructions == 2);
+    }
 }
 
 TEST_CASE("ArenaAllocator Large Allocation Scenarios")

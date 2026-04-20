@@ -5,61 +5,62 @@
 #include <memory>
 #include <mutex>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
-#include <cstdio>
 #include <cstring>
+#include <limits>
+#include <new>
 #include <stdexcept>
 #include <algorithm>
+#include <unordered_map>
 
 // Platform-specific TLS API abstraction
 #ifdef _WIN32
-    
+
     #define NOMINMAX
     #include <windows.h>
-    
+
     namespace EAllocKit {
         using tls_key_t = DWORD;
-        
+
         inline int tls_key_create(tls_key_t* key, void(*destructor)(void*)) {
-            // Use FLS (Fiber Local Storage) instead of TLS for automatic cleanup
-            // FLS works in regular threads too and supports destructor callbacks
             *key = FlsAlloc(reinterpret_cast<PFLS_CALLBACK_FUNCTION>(destructor));
             if (*key == FLS_OUT_OF_INDEXES) {
                 return -1;
             }
             return 0;
         }
-        
+
         inline void* tls_get_value(tls_key_t key) {
             return FlsGetValue(key);
         }
-        
+
         inline int tls_set_value(tls_key_t key, void* value) {
             return FlsSetValue(key, value) ? 0 : -1;
         }
-        
+
         inline int tls_key_delete(tls_key_t key) {
             return FlsFree(key) ? 0 : -1;
         }
     }
 #elif defined(__unix__) || defined(__unix) || defined(__APPLE__)
     #include <pthread.h>
-    
+
     namespace EAllocKit {
         using tls_key_t = pthread_key_t;
-        
+
         inline int tls_key_create(tls_key_t* key, void(*destructor)(void*)) {
             return pthread_key_create(key, destructor);
         }
-        
+
         inline void* tls_get_value(tls_key_t key) {
             return pthread_getspecific(key);
         }
-        
+
         inline int tls_set_value(tls_key_t key, void* value) {
             return pthread_setspecific(key, value);
         }
-        
+
         inline int tls_key_delete(tls_key_t key) {
             return pthread_key_delete(key);
         }
@@ -73,44 +74,60 @@ namespace EAllocKit
     class ThreadCachingAllocator
     {
     public:
-        // Size class definitions
-        enum class ObjectSize : size_t 
+        enum class ObjectSize : size_t
         {
-            SMALL = 0,   // 1-128B: pointers, basic objects, small strings
-            MEDIUM = 1,  // 129-1024B: composite objects, medium buffers
-            LARGE = 2,   // >1KB but <=4KB: large buffers, still pooled
-            DIRECT = 3,  // >4KB: directly allocated via malloc
-            COUNT = 4    // Total number of size classes
+            SMALL = 0,
+            MEDIUM = 1,
+            LARGE = 2,
+            DIRECT = 3,
+            COUNT = 4
         };
-        
-        // Free list node for linking freed objects
+
         struct FreeListNode
         {
             FreeListNode* next = nullptr;
         };
 
-        // Allocation header to store size information
         struct AllocationHeader
         {
-            uint32_t sizeClass;      // Size class, or special value for direct malloc
+            uint32_t magic;
+            uint32_t sizeClass;
+            uint32_t state;
+            uint32_t reserved;
         };
-        
-        // Extracted constants as constexpr parameters
-        static constexpr size_t kSmallThreshold = 128;        // 128B
-        static constexpr size_t kMediumThreshold = 1024;      // 1KB
-        static constexpr size_t kMaxCacheSize = 1048576;      // 1MB per thread cache
-        
-        // Per-class object limits
-        static constexpr size_t kMaxSmallObjects = 256;       // 256 * 128B = 32KB
-        static constexpr size_t kMaxMediumObjects = 64;       // 64 * 1KB = 64KB  
-        static constexpr size_t kMaxLargeObjects = 16;        // 16 * varies = flexible
-        static constexpr size_t kDefaultAlignment = 8;
-        static constexpr size_t kPageSize = 4096;
-        
-        // Special marker for directly allocated objects
-        static constexpr uint32_t DIRECT_ALLOC_MARKER = 0xFFFFFFFF;
 
-        // Central free list manages global memory blocks for each size class
+        struct AllocationMarker
+        {
+            size_t distance;
+            uint32_t cookie;
+            uint32_t reserved;
+        };
+
+        struct SharedTlsState
+        {
+            tls_key_t key{};
+            std::atomic<size_t> refCount{1};
+            std::atomic<size_t> liveCaches{0};
+            std::atomic<bool> allocatorAlive{true};
+            std::atomic<bool> keyDeletePending{false};
+            std::atomic<bool> keyDeleted{false};
+            std::mutex keyDeleteMutex;
+        };
+
+        static constexpr size_t kSmallThreshold = 128;
+        static constexpr size_t kMediumThreshold = 1024;
+        static constexpr size_t kLargeThreshold = kMediumThreshold * 4;
+        static constexpr size_t kMaxCacheSize = 1048576;
+
+        static constexpr size_t kMaxSmallObjects = 256;
+        static constexpr size_t kMaxMediumObjects = 64;
+        static constexpr size_t kMaxLargeObjects = 16;
+        static constexpr size_t kDefaultAlignment = alignof(std::max_align_t);
+        static constexpr size_t kPageSize = 4096;
+
+        static constexpr uint32_t DIRECT_ALLOC_MARKER = 0xFFFFFFFFu;
+        static_assert(kSmallThreshold >= sizeof(AllocationHeader) + sizeof(AllocationMarker));
+
         class CentralFreeList
         {
         public:
@@ -134,9 +151,8 @@ namespace EAllocKit
             size_t _objectSize;
             size_t _objectsPerPage;
             Page* _pages = nullptr;
-            
+
             void AllocatePage();
-            void DeallocatePage(Page* span);
         };
 
         class ThreadLocalCache
@@ -147,36 +163,30 @@ namespace EAllocKit
                 FreeListNode* head = nullptr;
                 size_t count = 0;
                 size_t maxCount = 0;
-                
-                FreeList() = default;
             };
 
         public:
-            explicit ThreadLocalCache(ThreadCachingAllocator* owner);
+            ThreadLocalCache(ThreadCachingAllocator* owner, SharedTlsState* sharedState);
             ~ThreadLocalCache();
 
             void* Allocate(ObjectSize sizeClass);
             void Deallocate(void* ptr, ObjectSize sizeClass);
-            
-            // Garbage collection when cache becomes too large
-            void GarbageCollect();
-            
-            // Get cache size for statistics
             size_t GetCacheSize() const { return _totalCacheSize; }
+            void MarkRegistered();
 
         private:
             ThreadCachingAllocator* _owner;
+            SharedTlsState* _sharedState;
             std::array<FreeList, static_cast<size_t>(ObjectSize::COUNT)> _freeLists;
             size_t _totalCacheSize = 0;
-            
-            // Helper methods
+            bool _registered = false;
+
             void FetchFromCentral(ObjectSize sizeClass);
             void ReturnToCentral(ObjectSize sizeClass);
-            bool ShouldGarbageCollect() const { return _totalCacheSize > kMaxCacheSize; }
+            void ClearFreeLists();
         };
 
     private:
-        // Static destructor callback for TLS cleanup
         static auto ThreadCacheDestructor(void* cache) -> void;
 
     public:
@@ -188,51 +198,111 @@ namespace EAllocKit
         ThreadCachingAllocator(ThreadCachingAllocator&&) = delete;
         ThreadCachingAllocator& operator=(ThreadCachingAllocator&&) = delete;
 
-        // Main allocation interface
         void* Allocate(size_t size);
         void* Allocate(size_t size, size_t alignment);
         void Deallocate(void* ptr);
 
-        // Statistics and debugging
         size_t GetThreadCacheSize() const;
 
-    private: // Util
-        static auto IsPowerOfTwo(size_t value)
+    private:
+        static auto IsPowerOfTwo(size_t value) -> bool
         {
             return value > 0 && (value & (value - 1)) == 0;
         }
 
-        static auto UpAlignment(size_t size, size_t alignment)
+        static auto TryAdd(size_t lhs, size_t rhs, size_t& result) -> bool
         {
-            return (size + alignment - 1) & ~(alignment - 1);
+            if (lhs > (std::numeric_limits<size_t>::max)() - rhs)
+            {
+                return false;
+            }
+
+            result = lhs + rhs;
+            return true;
         }
 
+        static auto TryMultiply(size_t lhs, size_t rhs, size_t& result) -> bool
+        {
+            if (lhs == 0 || rhs == 0)
+            {
+                result = 0;
+                return true;
+            }
+
+            if (lhs > (std::numeric_limits<size_t>::max)() / rhs)
+            {
+                return false;
+            }
+
+            result = lhs * rhs;
+            return true;
+        }
+
+        static auto TryAlignUp(size_t value, size_t alignment, size_t& result) -> bool
+        {
+            if (!IsPowerOfTwo(alignment))
+            {
+                return false;
+            }
+
+            const size_t mask = alignment - 1;
+            if (value > (std::numeric_limits<size_t>::max)() - mask)
+            {
+                return false;
+            }
+
+            result = (value + mask) & ~mask;
+            return true;
+        }
+
+        static constexpr uint32_t kAllocationHeaderMagic = 0x54434148u;
+        static constexpr uint32_t kAllocationMarkerCookie = 0x5443414Du;
+        static constexpr uint32_t kAllocationStateAllocated = 0xA110CA7Eu;
+        static constexpr uint32_t kAllocationStateFreed = 0xFEEEFEEEu;
+        static constexpr size_t kFreeListNodeOffset =
+            ((sizeof(AllocationHeader) + alignof(FreeListNode) - 1) / alignof(FreeListNode)) *
+            alignof(FreeListNode);
+        static_assert(kSmallThreshold >= kFreeListNodeOffset + sizeof(FreeListNode));
+
+        static auto AddSharedTlsStateRef(SharedTlsState* state) -> void;
+        static auto ReleaseSharedTlsState(SharedTlsState* state) -> void;
+        static auto MaybeDeleteTlsKey(SharedTlsState* state) -> void;
+        static auto GetFreeListNode(void* block) -> FreeListNode*;
+        static auto GetBlockFromFreeListNode(FreeListNode* node) -> void*;
+        static auto WriteAllocationMarker(void* userPtr, size_t distance) -> void;
+
+        struct AllocationRecord
+        {
+            void* rawPtr = nullptr;
+            uint32_t sizeClass = DIRECT_ALLOC_MARKER;
+        };
+
     private:
-        // Global components
         std::array<std::unique_ptr<CentralFreeList>, static_cast<size_t>(ObjectSize::COUNT)> _centralFreeLists;
-        
-        // Thread-local storage
-        tls_key_t _tlsKey;
-        
+        SharedTlsState* _sharedState = nullptr;
+        std::atomic<bool> _isShuttingDown{false};
+        mutable std::mutex _allocationRegistryMutex;
+        std::unordered_map<void*, AllocationRecord> _activeAllocations;
+        std::unordered_map<void*, void*> _retiredAllocationsByUser;
+        std::unordered_map<void*, void*> _retiredAllocationsByRaw;
+
         ThreadLocalCache* GetThreadCache();
+        ThreadLocalCache* GetCurrentThreadCache() const;
         static auto GetSizeClass(size_t size) -> ObjectSize;
         static auto GetClassSize(ObjectSize sizeClass) -> size_t;
         static auto GetMaxObjectCount(ObjectSize sizeClass) -> size_t;
-        
-        static auto GetAllocationHeader(void* userPtr) -> AllocationHeader*;
     };
 
     inline ThreadCachingAllocator::CentralFreeList::CentralFreeList(size_t objectSize)
         : _objectSize(objectSize)
-        , _objectsPerPage(std::max(size_t(1), (kPageSize / objectSize)))
+        , _objectsPerPage(std::max(size_t(1), kPageSize / objectSize))
     {
     }
 
     inline ThreadCachingAllocator::CentralFreeList::~CentralFreeList()
     {
         std::lock_guard<std::mutex> lock(_mutex);
-        
-        // Free all spans
+
         Page* current = _pages;
         while (current)
         {
@@ -246,74 +316,89 @@ namespace EAllocKit
     inline auto ThreadCachingAllocator::CentralFreeList::Allocate() -> void*
     {
         std::lock_guard<std::mutex> lock(_mutex);
-        
+
         if (!_freeList)
         {
             AllocatePage();
-            if (!_freeList) 
+            if (!_freeList)
+            {
                 return nullptr;
+            }
         }
-        
+
         FreeListNode* result = _freeList;
         _freeList = result->next;
-        
-        return result;
+        return ThreadCachingAllocator::GetBlockFromFreeListNode(result);
     }
 
     inline auto ThreadCachingAllocator::CentralFreeList::Deallocate(void* ptr) -> void
     {
-        if (!ptr) return;
-        
+        if (!ptr)
+        {
+            return;
+        }
+
         std::lock_guard<std::mutex> lock(_mutex);
-        
-        FreeListNode* node = static_cast<FreeListNode*>(ptr);
+
+        FreeListNode* node = ThreadCachingAllocator::GetFreeListNode(ptr);
         node->next = _freeList;
         _freeList = node;
     }
 
     inline auto ThreadCachingAllocator::CentralFreeList::AllocatePage() -> void
     {
-        size_t spanSize = _objectSize * _objectsPerPage;
-        
-        void* memory = ::malloc(spanSize);
-        if (!memory) 
+        size_t spanSize = 0;
+        if (!ThreadCachingAllocator::TryMultiply(_objectSize, _objectsPerPage, spanSize))
+        {
             return;
-        
-        Page* pPage = new Page{memory, spanSize, _pages};
-        _pages = pPage;
-        
-        // Initialize free list from span
-        uint8_t* current = static_cast<uint8_t*>(memory);
-        uint8_t* end = current + spanSize;
-        
-        // Build linked list of objects
+        }
+
+        void* memory = ::malloc(spanSize);
+        if (!memory)
+        {
+            return;
+        }
+
+        Page* page = new (std::nothrow) Page{memory, spanSize, _pages};
+        if (!page)
+        {
+            ::free(memory);
+            return;
+        }
+
+        _pages = page;
+
+        auto* current = static_cast<uint8_t*>(memory);
+        auto* end = current + spanSize;
+
         FreeListNode* newHead = nullptr;
         while (current + _objectSize <= end)
         {
-            FreeListNode* node = reinterpret_cast<FreeListNode*>(current);
-
+            FreeListNode* node = ThreadCachingAllocator::GetFreeListNode(current);
             node->next = newHead;
             newHead = node;
-
             current += _objectSize;
         }
-        
-        // Update free list
+
         if (newHead)
         {
             FreeListNode* tail = newHead;
-            while (tail->next) 
+            while (tail->next)
+            {
                 tail = tail->next;
+            }
             tail->next = _freeList;
         }
 
         _freeList = newHead;
     }
 
-    inline ThreadCachingAllocator::ThreadLocalCache::ThreadLocalCache(ThreadCachingAllocator* owner)
+    inline ThreadCachingAllocator::ThreadLocalCache::ThreadLocalCache(
+        ThreadCachingAllocator* owner,
+        SharedTlsState* sharedState)
         : _owner(owner)
+        , _sharedState(sharedState)
     {
-        // Initialize max counts for the 3 size classes
         _freeLists[static_cast<size_t>(ObjectSize::SMALL)].maxCount = kMaxSmallObjects;
         _freeLists[static_cast<size_t>(ObjectSize::MEDIUM)].maxCount = kMaxMediumObjects;
         _freeLists[static_cast<size_t>(ObjectSize::LARGE)].maxCount = kMaxLargeObjects;
@@ -321,174 +406,167 @@ namespace EAllocKit
 
     inline ThreadCachingAllocator::ThreadLocalCache::~ThreadLocalCache()
     {
-        // Return all cached objects to central lists
-        if (_freeLists[static_cast<size_t>(ObjectSize::SMALL)].head) {
-            ReturnToCentral(ObjectSize::SMALL);
+        const bool canReturnToOwner =
+            _owner != nullptr &&
+            _sharedState != nullptr &&
+            _sharedState->allocatorAlive.load(std::memory_order_acquire);
+
+        if (canReturnToOwner)
+        {
+            if (_freeLists[static_cast<size_t>(ObjectSize::SMALL)].head)
+            {
+                ReturnToCentral(ObjectSize::SMALL);
+            }
+            if (_freeLists[static_cast<size_t>(ObjectSize::MEDIUM)].head)
+            {
+                ReturnToCentral(ObjectSize::MEDIUM);
+            }
+            if (_freeLists[static_cast<size_t>(ObjectSize::LARGE)].head)
+            {
+                ReturnToCentral(ObjectSize::LARGE);
+            }
         }
-        if (_freeLists[static_cast<size_t>(ObjectSize::MEDIUM)].head) {
-            ReturnToCentral(ObjectSize::MEDIUM);
+        else
+        {
+            ClearFreeLists();
         }
-        if (_freeLists[static_cast<size_t>(ObjectSize::LARGE)].head) {
-            ReturnToCentral(ObjectSize::LARGE);
+
+        if (_registered && _sharedState)
+        {
+            _sharedState->liveCaches.fetch_sub(1, std::memory_order_acq_rel);
+            ThreadCachingAllocator::ReleaseSharedTlsState(_sharedState);
         }
+
+        _owner = nullptr;
+        _sharedState = nullptr;
+    }
+
+    inline auto ThreadCachingAllocator::ThreadLocalCache::MarkRegistered() -> void
+    {
+        if (_registered || !_sharedState)
+        {
+            return;
+        }
+
+        ThreadCachingAllocator::AddSharedTlsStateRef(_sharedState);
+        _sharedState->liveCaches.fetch_add(1, std::memory_order_acq_rel);
+        _registered = true;
     }
 
     inline auto ThreadCachingAllocator::ThreadLocalCache::Allocate(ObjectSize sizeClass) -> void*
     {
         FreeList& freeList = _freeLists[static_cast<size_t>(sizeClass)];
-        
+
         if (!freeList.head)
         {
             FetchFromCentral(sizeClass);
         }
-        
-        if (freeList.head)
+
+        if (!freeList.head)
         {
-            FreeListNode* result = freeList.head;
-            freeList.head = result->next;
-            freeList.count--;
-            
-            size_t classSize = _owner->GetClassSize(sizeClass);
-            _totalCacheSize -= classSize;
-            
-            return result;
+            return nullptr;
         }
-        
-        return nullptr;
+
+        FreeListNode* result = freeList.head;
+        freeList.head = result->next;
+        freeList.count--;
+
+        const size_t classSize = _owner->GetClassSize(sizeClass);
+        _totalCacheSize -= classSize;
+
+        return ThreadCachingAllocator::GetBlockFromFreeListNode(result);
     }
 
-    inline auto ThreadCachingAllocator::ThreadLocalCache::Deallocate(void* ptr, ObjectSize sizeClass) ->void
+    inline auto ThreadCachingAllocator::ThreadLocalCache::Deallocate(void* ptr, ObjectSize sizeClass) -> void
     {
-        if (!ptr) return;
-        
+        if (!ptr)
+        {
+            return;
+        }
+
         FreeList& freeList = _freeLists[static_cast<size_t>(sizeClass)];
-        
+
         if (freeList.count >= freeList.maxCount)
         {
             ReturnToCentral(sizeClass);
         }
-        
-        FreeListNode* node = static_cast<FreeListNode*>(ptr);
+
+        FreeListNode* node = ThreadCachingAllocator::GetFreeListNode(ptr);
         node->next = freeList.head;
         freeList.head = node;
         freeList.count++;
-        
-        size_t classSize = _owner->GetClassSize(sizeClass);
+
+        const size_t classSize = _owner->GetClassSize(sizeClass);
         _totalCacheSize += classSize;
-        
-        if (ShouldGarbageCollect())
-        {
-            GarbageCollect();
-        }
     }
 
     inline auto ThreadCachingAllocator::ThreadLocalCache::FetchFromCentral(ObjectSize sizeClass) -> void
     {
-        auto& pCentralList = _owner->_centralFreeLists[static_cast<size_t>(sizeClass)];
-        
-        size_t fetchCount = std::min(_freeLists[static_cast<size_t>(sizeClass)].maxCount / 2, size_t(32));
-        
+        auto& centralList = _owner->_centralFreeLists[static_cast<size_t>(sizeClass)];
+        const size_t fetchCount = std::min(_freeLists[static_cast<size_t>(sizeClass)].maxCount / 2, size_t(32));
+
         FreeListNode* head = nullptr;
         size_t actualCount = 0;
-        
-        // Allocate objects one by one and build a linked list
+
         for (size_t i = 0; i < fetchCount; ++i)
         {
-            void* ptr = pCentralList->Allocate();
-            if (!ptr) break;
-            
-            FreeListNode* node = static_cast<FreeListNode*>(ptr);
+            void* ptr = centralList->Allocate();
+            if (!ptr)
+            {
+                break;
+            }
+
+            FreeListNode* node = ThreadCachingAllocator::GetFreeListNode(ptr);
             node->next = head;
             head = node;
             actualCount++;
         }
-        
-        if (actualCount > 0)
+
+        if (actualCount == 0)
         {
-            _freeLists[static_cast<size_t>(sizeClass)].head = head;
-            _freeLists[static_cast<size_t>(sizeClass)].count = actualCount;
-            
-            size_t classSize = _owner->GetClassSize(sizeClass);
-            _totalCacheSize += classSize * actualCount;
+            return;
         }
+
+        _freeLists[static_cast<size_t>(sizeClass)].head = head;
+        _freeLists[static_cast<size_t>(sizeClass)].count = actualCount;
+
+        const size_t classSize = _owner->GetClassSize(sizeClass);
+        _totalCacheSize += classSize * actualCount;
     }
 
     inline auto ThreadCachingAllocator::ThreadLocalCache::ReturnToCentral(ObjectSize sizeClass) -> void
     {
         FreeList& freeList = _freeLists[static_cast<size_t>(sizeClass)];
-        if (!freeList.head) 
+        if (!freeList.head)
+        {
             return;
-        
+        }
+
         auto& centralList = *_owner->_centralFreeLists[static_cast<size_t>(sizeClass)];
-        
-        // Deallocate objects one by one
         FreeListNode* current = freeList.head;
         while (current)
         {
             FreeListNode* next = current->next;
-            centralList.Deallocate(current);
+            centralList.Deallocate(ThreadCachingAllocator::GetBlockFromFreeListNode(current));
             current = next;
         }
-        
-        size_t classSize = _owner->GetClassSize(sizeClass);
+
+        const size_t classSize = _owner->GetClassSize(sizeClass);
         _totalCacheSize -= classSize * freeList.count;
-        
+
         freeList.head = nullptr;
         freeList.count = 0;
     }
 
-    inline auto ThreadCachingAllocator::ThreadLocalCache::GarbageCollect() -> void
+    inline auto ThreadCachingAllocator::ThreadLocalCache::ClearFreeLists() -> void
     {
-        // Return excess objects from largest size classes first (LARGE -> MEDIUM -> SMALL)
-        ObjectSize sizeClasses[] = {ObjectSize::LARGE, ObjectSize::MEDIUM, ObjectSize::SMALL};
-        
-        for (ObjectSize sizeClass : sizeClasses)
+        for (auto& freeList : _freeLists)
         {
-            FreeList& freeList = _freeLists[static_cast<size_t>(sizeClass)];
-            
-            if (freeList.count > freeList.maxCount / 2)
-            {
-                // Return half of the cached objects
-                size_t returnCount = freeList.count / 2;
-                
-                // Find the node at returnCount position
-                FreeListNode* returnHead = freeList.head;
-                FreeListNode* keepTail = nullptr;
-                
-                for (size_t j = 0; j < returnCount && returnHead; ++j)
-                {
-                    if (j == returnCount - 1)
-                    {
-                        keepTail = returnHead;
-                    }
-                    returnHead = returnHead->next;
-                }
-                
-                if (keepTail)
-                {
-                    keepTail->next = nullptr;
-                    
-                    auto& centralList = *_owner->_centralFreeLists[static_cast<size_t>(sizeClass)];
-                    
-                    // Deallocate objects one by one
-                    FreeListNode* current = freeList.head;
-                    for (size_t i = 0; i < returnCount && current; ++i)
-                    {
-                        FreeListNode* next = current->next;
-                        centralList.Deallocate(current);
-                        current = next;
-                    }
-                    
-                    freeList.head = returnHead;
-                    freeList.count -= returnCount;
-                    
-                    size_t classSize = _owner->GetClassSize(sizeClass);
-                    _totalCacheSize -= classSize * returnCount;
-                }
-            }
-            
-            if (!ShouldGarbageCollect()) break;
+            freeList.head = nullptr;
+            freeList.count = 0;
         }
+
+        _totalCacheSize = 0;
     }
 
     inline auto ThreadCachingAllocator::ThreadCacheDestructor(void* cache) -> void
@@ -498,39 +576,168 @@ namespace EAllocKit
 
     inline ThreadCachingAllocator::ThreadCachingAllocator()
     {
-        _centralFreeLists[static_cast<size_t>(ObjectSize::SMALL)] = std::make_unique<CentralFreeList>(GetClassSize(ObjectSize::SMALL));
-        _centralFreeLists[static_cast<size_t>(ObjectSize::MEDIUM)] = std::make_unique<CentralFreeList>(GetClassSize(ObjectSize::MEDIUM));
-        _centralFreeLists[static_cast<size_t>(ObjectSize::LARGE)] = std::make_unique<CentralFreeList>(GetClassSize(ObjectSize::LARGE));
-        
-        // Create TLS key with destructor callback
-        if (tls_key_create(&_tlsKey, ThreadCacheDestructor) != 0)
+        _centralFreeLists[static_cast<size_t>(ObjectSize::SMALL)] =
+            std::make_unique<CentralFreeList>(GetClassSize(ObjectSize::SMALL));
+        _centralFreeLists[static_cast<size_t>(ObjectSize::MEDIUM)] =
+            std::make_unique<CentralFreeList>(GetClassSize(ObjectSize::MEDIUM));
+        _centralFreeLists[static_cast<size_t>(ObjectSize::LARGE)] =
+            std::make_unique<CentralFreeList>(GetClassSize(ObjectSize::LARGE));
+
+        _sharedState = new SharedTlsState{};
+        if (tls_key_create(&_sharedState->key, ThreadCacheDestructor) != 0)
         {
+            delete _sharedState;
+            _sharedState = nullptr;
             throw std::runtime_error("Failed to create TLS key for ThreadCachingAllocator");
         }
     }
 
     inline ThreadCachingAllocator::~ThreadCachingAllocator()
     {
-        // Clean up TLS key
-        tls_key_delete(_tlsKey);
+        _isShuttingDown.store(true, std::memory_order_release);
+
+        SharedTlsState* state = _sharedState;
+        _sharedState = nullptr;
+        if (!state)
+        {
+            return;
+        }
+
+        state->allocatorAlive.store(false, std::memory_order_release);
+
+        ThreadLocalCache* cache = static_cast<ThreadLocalCache*>(tls_get_value(state->key));
+        if (cache)
+        {
+            tls_set_value(state->key, nullptr);
+            delete cache;
+        }
+
+        state->keyDeletePending.store(true, std::memory_order_release);
+        ReleaseSharedTlsState(state);
+
+        std::lock_guard<std::mutex> lock(_allocationRegistryMutex);
+        for (auto& entry : _activeAllocations)
+        {
+            if (entry.second.sizeClass == DIRECT_ALLOC_MARKER)
+            {
+                ::free(entry.second.rawPtr);
+            }
+        }
+        _activeAllocations.clear();
+        _retiredAllocationsByUser.clear();
+        _retiredAllocationsByRaw.clear();
+    }
+
+    inline auto ThreadCachingAllocator::AddSharedTlsStateRef(SharedTlsState* state) -> void
+    {
+        if (!state)
+        {
+            return;
+        }
+
+        state->refCount.fetch_add(1, std::memory_order_acq_rel);
+    }
+
+    inline auto ThreadCachingAllocator::ReleaseSharedTlsState(SharedTlsState* state) -> void
+    {
+        if (!state)
+        {
+            return;
+        }
+
+        MaybeDeleteTlsKey(state);
+
+        if (state->refCount.fetch_sub(1, std::memory_order_acq_rel) != 1)
+        {
+            return;
+        }
+
+        MaybeDeleteTlsKey(state);
+        delete state;
+    }
+
+    inline auto ThreadCachingAllocator::MaybeDeleteTlsKey(SharedTlsState* state) -> void
+    {
+        if (!state || !state->keyDeletePending.load(std::memory_order_acquire))
+        {
+            return;
+        }
+
+        if (state->liveCaches.load(std::memory_order_acquire) != 0)
+        {
+            return;
+        }
+
+        std::lock_guard<std::mutex> lock(state->keyDeleteMutex);
+        if (state->keyDeleted.exchange(true, std::memory_order_acq_rel))
+        {
+            return;
+        }
+
+        tls_key_delete(state->key);
+    }
+
+    inline auto ThreadCachingAllocator::GetFreeListNode(void* block) -> FreeListNode*
+    {
+        return reinterpret_cast<FreeListNode*>(static_cast<uint8_t*>(block) + kFreeListNodeOffset);
+    }
+
+    inline auto ThreadCachingAllocator::GetBlockFromFreeListNode(FreeListNode* node) -> void*
+    {
+        return static_cast<void*>(reinterpret_cast<uint8_t*>(node) - kFreeListNodeOffset);
+    }
+
+    inline auto ThreadCachingAllocator::WriteAllocationMarker(void* userPtr, size_t distance) -> void
+    {
+        AllocationMarker marker{};
+        marker.distance = distance;
+        marker.cookie = kAllocationMarkerCookie;
+
+        std::memcpy(
+            static_cast<uint8_t*>(userPtr) - sizeof(AllocationMarker),
+            &marker,
+            sizeof(AllocationMarker));
     }
 
     inline ThreadCachingAllocator::ThreadLocalCache* ThreadCachingAllocator::GetThreadCache()
     {
-        ThreadLocalCache* cache = static_cast<ThreadLocalCache*>(tls_get_value(_tlsKey));
-        
+        ThreadLocalCache* cache = GetCurrentThreadCache();
+        if (cache)
+        {
+            return cache;
+        }
+
+        SharedTlsState* state = _sharedState;
+        if (!state || _isShuttingDown.load(std::memory_order_acquire))
+        {
+            return nullptr;
+        }
+
+        cache = new (std::nothrow) ThreadLocalCache(this, state);
         if (!cache)
         {
-            // Create new cache for this thread
-            cache = new ThreadLocalCache(this);
-            if (tls_set_value(_tlsKey, cache) != 0)
-            {
-                delete cache;
-                return nullptr;
-            }
+            return nullptr;
         }
-        
+
+        cache->MarkRegistered();
+
+        if (tls_set_value(state->key, cache) != 0)
+        {
+            delete cache;
+            return nullptr;
+        }
         return cache;
+    }
+
+    inline ThreadCachingAllocator::ThreadLocalCache* ThreadCachingAllocator::GetCurrentThreadCache() const
+    {
+        SharedTlsState* state = _sharedState;
+        if (!state || _isShuttingDown.load(std::memory_order_acquire))
+        {
+            return nullptr;
+        }
+
+        return static_cast<ThreadLocalCache*>(tls_get_value(state->key));
     }
 
     inline auto ThreadCachingAllocator::Allocate(size_t size) -> void*
@@ -540,134 +747,233 @@ namespace EAllocKit
 
     inline auto ThreadCachingAllocator::Allocate(size_t size, size_t alignment) -> void*
     {
-        if (size == 0) 
+        if (size == 0)
+        {
             return nullptr;
-        
+        }
+
         if (!IsPowerOfTwo(alignment))
+        {
             throw std::invalid_argument("ThreadCachingAllocator only supports power-of-2 alignments");
-        
-        // Store original size
-        size_t originalSize = size;
-        
-        // Calculate aligned user data address using FreeListAllocator's layout
+        }
+
         const size_t headerSize = sizeof(AllocationHeader);
-        const size_t distanceSize = 4; // 4 bytes to store distance from user pointer to header
-        
-        // Calculate minimum space needed: header + distance + user data + extra for alignment
-        size_t minimalSpaceNeeded = headerSize + distanceSize + size + alignment - 1;
-        
-        ObjectSize sizeClass = GetSizeClass(minimalSpaceNeeded);
-        
+        const size_t markerSize = sizeof(AllocationMarker);
+
+        size_t minimalSpaceNeeded = 0;
+        if (!TryAdd(headerSize, markerSize, minimalSpaceNeeded) ||
+            !TryAdd(minimalSpaceNeeded, size, minimalSpaceNeeded) ||
+            !TryAdd(minimalSpaceNeeded, alignment - 1, minimalSpaceNeeded))
+        {
+            return nullptr;
+        }
+
+        const ObjectSize sizeClass = GetSizeClass(minimalSpaceNeeded);
+
         void* rawPtr = nullptr;
         if (sizeClass == ObjectSize::DIRECT)
         {
-            // For very large allocations, use direct malloc
             rawPtr = ::malloc(minimalSpaceNeeded);
             if (!rawPtr)
+            {
                 return nullptr;
+            }
         }
         else
         {
-            // Use cached allocation for smaller objects
             ThreadLocalCache* cache = GetThreadCache();
-            
-            rawPtr = cache->Allocate(sizeClass);
+            if (cache)
+            {
+                rawPtr = cache->Allocate(sizeClass);
+            }
+
             if (!rawPtr)
             {
-                // Fallback to central allocator
                 rawPtr = _centralFreeLists[static_cast<size_t>(sizeClass)]->Allocate();
                 if (!rawPtr)
+                {
                     return nullptr;
+                }
             }
         }
-        
-        // Calculate aligned user address
-        size_t rawAddr = reinterpret_cast<size_t>(rawPtr);
-        size_t afterHeaderAddr = rawAddr + headerSize;
-        size_t minimalUserAddr = afterHeaderAddr + distanceSize;
-        size_t alignedUserAddr = UpAlignment(minimalUserAddr, alignment);
-        
-        // Store allocation header at the beginning
+
+        const size_t rawAddr = reinterpret_cast<size_t>(rawPtr);
+
+        size_t minimalUserAddr = 0;
+        if (!TryAdd(rawAddr, headerSize + markerSize, minimalUserAddr))
+        {
+            if (sizeClass == ObjectSize::DIRECT)
+            {
+                ::free(rawPtr);
+            }
+            else
+            {
+                _centralFreeLists[static_cast<size_t>(sizeClass)]->Deallocate(rawPtr);
+            }
+            return nullptr;
+        }
+
+        size_t alignedUserAddr = 0;
+        if (!TryAlignUp(minimalUserAddr, alignment, alignedUserAddr))
+        {
+            if (sizeClass == ObjectSize::DIRECT)
+            {
+                ::free(rawPtr);
+            }
+            else
+            {
+                _centralFreeLists[static_cast<size_t>(sizeClass)]->Deallocate(rawPtr);
+            }
+            return nullptr;
+        }
+
         AllocationHeader* header = static_cast<AllocationHeader*>(rawPtr);
-        if (sizeClass == ObjectSize::DIRECT) 
-            header->sizeClass = DIRECT_ALLOC_MARKER;
-        else 
-            header->sizeClass = static_cast<uint32_t>(sizeClass);
-        
-        // Store distance from user pointer back to header
-        uint8_t* alignedUserPtr = reinterpret_cast<uint8_t*>(alignedUserAddr);
-        uint32_t distance = static_cast<uint32_t>(alignedUserAddr - rawAddr);
-        uint32_t* distPtr = reinterpret_cast<uint32_t*>(alignedUserPtr) - 1;
-        *distPtr = distance;
-        
+        header->magic = kAllocationHeaderMagic;
+        header->sizeClass =
+            (sizeClass == ObjectSize::DIRECT)
+                ? DIRECT_ALLOC_MARKER
+                : static_cast<uint32_t>(sizeClass);
+        header->state = kAllocationStateAllocated;
+        header->reserved = 0;
+
+        auto* alignedUserPtr = reinterpret_cast<uint8_t*>(alignedUserAddr);
+        WriteAllocationMarker(alignedUserPtr, alignedUserAddr - rawAddr);
+
+        {
+            std::lock_guard<std::mutex> lock(_allocationRegistryMutex);
+
+            auto retiredRawIt = _retiredAllocationsByRaw.find(rawPtr);
+            if (retiredRawIt != _retiredAllocationsByRaw.end())
+            {
+                _retiredAllocationsByUser.erase(retiredRawIt->second);
+                _retiredAllocationsByRaw.erase(retiredRawIt);
+            }
+
+            AllocationRecord record{};
+            record.rawPtr = rawPtr;
+            record.sizeClass = header->sizeClass;
+
+            try
+            {
+                _activeAllocations.emplace(alignedUserPtr, record);
+            }
+            catch (...)
+            {
+                if (sizeClass == ObjectSize::DIRECT)
+                {
+                    ::free(rawPtr);
+                }
+                else
+                {
+                    _centralFreeLists[static_cast<size_t>(sizeClass)]->Deallocate(rawPtr);
+                }
+                return nullptr;
+            }
+        }
+
         return alignedUserPtr;
     }
 
     inline auto ThreadCachingAllocator::Deallocate(void* ptr) -> void
     {
-        if (!ptr) 
+        if (!ptr)
+        {
             return;
-        
-        // Get allocation header to retrieve size information
-        AllocationHeader* header = GetAllocationHeader(ptr);
-        
-        if (header->sizeClass == DIRECT_ALLOC_MARKER)
-            ::free(header);
+        }
+
+        AllocationRecord record{};
+        {
+            std::lock_guard<std::mutex> lock(_allocationRegistryMutex);
+
+            auto activeIt = _activeAllocations.find(ptr);
+            if (activeIt == _activeAllocations.end())
+            {
+                if (_retiredAllocationsByUser.find(ptr) != _retiredAllocationsByUser.end())
+                {
+                    return;
+                }
+
+                return;
+            }
+
+            record = activeIt->second;
+            _activeAllocations.erase(activeIt);
+
+            _retiredAllocationsByUser[ptr] = record.rawPtr;
+            _retiredAllocationsByRaw[record.rawPtr] = ptr;
+        }
+
+        auto* header = static_cast<AllocationHeader*>(record.rawPtr);
+        if (header->magic != kAllocationHeaderMagic ||
+            header->state != kAllocationStateAllocated ||
+            header->sizeClass != record.sizeClass)
+        {
+            return;
+        }
+
+        header->state = kAllocationStateFreed;
+
+        if (record.sizeClass == DIRECT_ALLOC_MARKER)
+        {
+            ::free(record.rawPtr);
+            return;
+        }
+
+        ThreadLocalCache* cache = GetCurrentThreadCache();
+        if (cache)
+        {
+            cache->Deallocate(record.rawPtr, static_cast<ObjectSize>(record.sizeClass));
+        }
         else
-            GetThreadCache()->Deallocate(header, static_cast<ObjectSize>(header->sizeClass));
+        {
+            _centralFreeLists[static_cast<size_t>(record.sizeClass)]->Deallocate(record.rawPtr);
+        }
     }
 
     inline auto ThreadCachingAllocator::GetThreadCacheSize() const -> size_t
     {
-        ThreadLocalCache* cache = static_cast<ThreadLocalCache*>(tls_get_value(_tlsKey));
+        ThreadLocalCache* cache = GetCurrentThreadCache();
         return cache ? cache->GetCacheSize() : 0;
     }
 
     inline auto ThreadCachingAllocator::GetSizeClass(size_t size) -> ObjectSize
     {
-        if (size <= kSmallThreshold) 
+        if (size <= kSmallThreshold)
+        {
             return ObjectSize::SMALL;
-        if (size <= kMediumThreshold) 
+        }
+        if (size <= kMediumThreshold)
+        {
             return ObjectSize::MEDIUM;
-        if (size <= kMediumThreshold * 4) 
+        }
+        if (size <= kLargeThreshold)
+        {
             return ObjectSize::LARGE;
+        }
         return ObjectSize::DIRECT;
     }
-    
+
     inline auto ThreadCachingAllocator::GetClassSize(ObjectSize sizeClass) -> size_t
     {
-        switch (sizeClass) 
+        switch (sizeClass)
         {
-            case ObjectSize::SMALL:  return kSmallThreshold;   // Always allocate 128B for small
-            case ObjectSize::MEDIUM: return kMediumThreshold;  // Always allocate 1KB for medium
-            case ObjectSize::LARGE:  return kMediumThreshold * 4;  // Use 4KB blocks for large objects
-            case ObjectSize::DIRECT: return 0;  // Direct allocations don't use fixed size
-            default:                 return kMediumThreshold;
-        }
-    }
-    
-    inline auto ThreadCachingAllocator::GetMaxObjectCount(ObjectSize sizeClass) -> size_t
-    {
-        switch (sizeClass) 
-        {
-            case ObjectSize::SMALL:  return kMaxSmallObjects;
-            case ObjectSize::MEDIUM: return kMaxMediumObjects;  
-            case ObjectSize::LARGE:  return kMaxLargeObjects;
-            default:                 return kMaxLargeObjects;
+            case ObjectSize::SMALL: return kSmallThreshold;
+            case ObjectSize::MEDIUM: return kMediumThreshold;
+            case ObjectSize::LARGE: return kLargeThreshold;
+            case ObjectSize::DIRECT: return 0;
+            default: return kMediumThreshold;
         }
     }
 
-    inline auto ThreadCachingAllocator::GetAllocationHeader(void* userPtr) -> AllocationHeader*
+    inline auto ThreadCachingAllocator::GetMaxObjectCount(ObjectSize sizeClass) -> size_t
     {
-        if (!userPtr) 
-            return nullptr;
-        
-        // Read distance from 4 bytes before user pointer (like FreeListAllocator)
-        uint32_t* distPtr = static_cast<uint32_t*>(userPtr) - 1;
-        uint32_t distance = *distPtr;
-        
-        // Calculate header address using distance
-        void* headerPtr = reinterpret_cast<uint8_t*>(userPtr) - distance;
-        return static_cast<AllocationHeader*>(headerPtr);
+        switch (sizeClass)
+        {
+            case ObjectSize::SMALL: return kMaxSmallObjects;
+            case ObjectSize::MEDIUM: return kMaxMediumObjects;
+            case ObjectSize::LARGE: return kMaxLargeObjects;
+            default: return kMaxLargeObjects;
+        }
     }
+
 } // namespace EAllocKit
