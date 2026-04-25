@@ -13,6 +13,32 @@
 
 using namespace MAF;
 
+#if defined(MAF_LENIENT_DEALLOCATE_ONLY)
+
+static_assert(MAF_DEALLOCATE_STRICT == 0, "Lenient SlabAllocator tests require MAF_DEALLOCATE_STRICT=0");
+
+TEST_CASE("SlabAllocator - lenient mode ignores invalid frees without corrupting state")
+{
+    SlabAllocator allocator(32, 2, 8);
+    void* ptr = allocator.Allocate();
+    REQUIRE(ptr != nullptr);
+
+    int foreign = 0;
+    CHECK_NOTHROW(allocator.Deallocate(&foreign));
+    CHECK(allocator.GetTotalAllocations() == 1);
+
+    allocator.Deallocate(ptr);
+    CHECK(allocator.GetTotalAllocations() == 0);
+    CHECK_NOTHROW(allocator.Deallocate(ptr));
+    CHECK(allocator.GetTotalAllocations() == 0);
+
+    void* again = allocator.Allocate();
+    REQUIRE(again != nullptr);
+    allocator.Deallocate(again);
+}
+
+#else
+
 TEST_CASE("SlabAllocator - requested size and slot size are reported separately")
 {
     SlabAllocator allocator(64, 8, 8);
@@ -26,13 +52,16 @@ TEST_CASE("SlabAllocator - requested size and slot size are reported separately"
 
     void* first = allocator.Allocate();
     void* second = allocator.Allocate(64);
+    void* partial = allocator.Allocate(17);
     REQUIRE(first != nullptr);
     REQUIRE(second != nullptr);
-    CHECK(allocator.GetTotalAllocations() == 2);
+    REQUIRE(partial != nullptr);
+    CHECK(allocator.GetTotalAllocations() == 3);
     CHECK(allocator.Allocate(65) == nullptr);
 
     allocator.Deallocate(first);
     allocator.Deallocate(second);
+    allocator.Deallocate(partial);
     CHECK(allocator.GetTotalAllocations() == 0);
 }
 
@@ -59,6 +88,42 @@ TEST_CASE("SlabAllocator - very small object sizes still produce usable distinct
         allocator.Deallocate(ptr);
 
     CHECK(allocator.GetTotalAllocations() == 0);
+}
+
+TEST_CASE("SlabAllocator - capacity and free space accessors track slabs and allocations")
+{
+    SlabAllocator allocator(32, 2, 8);
+    const size_t slotSize = allocator.GetSlotSize();
+    const size_t firstSlabCapacity = slotSize * allocator.GetObjectsPerSlab();
+
+    CHECK(allocator.GetTotalSlabs() == 1);
+    CHECK(allocator.GetCapacity() == firstSlabCapacity);
+    CHECK(allocator.GetUsedSpace() == 0);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity());
+
+    void* first = allocator.Allocate();
+    void* second = allocator.Allocate();
+    REQUIRE(first != nullptr);
+    REQUIRE(second != nullptr);
+    CHECK(allocator.GetTotalAllocations() == 2);
+    CHECK(allocator.GetUsedSpace() == slotSize * 2);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity() - allocator.GetUsedSpace());
+
+    void* third = allocator.Allocate();
+    REQUIRE(third != nullptr);
+    CHECK(allocator.GetTotalSlabs() == 2);
+    CHECK(allocator.GetCapacity() == firstSlabCapacity * 2);
+    CHECK(allocator.GetUsedSpace() == slotSize * 3);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity() - allocator.GetUsedSpace());
+
+    allocator.Deallocate(first);
+    CHECK(allocator.GetUsedSpace() == slotSize * 2);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity() - allocator.GetUsedSpace());
+
+    allocator.Deallocate(second);
+    allocator.Deallocate(third);
+    CHECK(allocator.GetUsedSpace() == 0);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity());
 }
 
 TEST_CASE("SlabAllocator - Allocate(0) is rejected without consuming a slot")
@@ -337,3 +402,5 @@ TEST_CASE("SlabAllocator - slab expansion triggers only after first slab is full
     REQUIRE(allocator.Allocate() != nullptr);
     CHECK(allocator.GetTotalSlabs() == 2);
 }
+
+#endif

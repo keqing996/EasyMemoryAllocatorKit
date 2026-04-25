@@ -97,7 +97,7 @@ TEST_CASE("ArenaAllocator Basic Allocation")
         CHECK(ptr == nullptr);
     }
     
-    SUBCASE("Invalid alignment returns nullptr") {
+    SUBCASE("Invalid alignment throws") {
         CHECK_THROWS_AS(arena.Allocate(64, 3), std::invalid_argument);
     }
     
@@ -163,6 +163,22 @@ TEST_CASE("ArenaAllocator Typed Allocation")
         void* explicit_ptr = arena.Allocate(sizeof(AlignedObject), alignof(AlignedObject));
         REQUIRE(explicit_ptr != nullptr);
         CHECK(reinterpret_cast<std::uintptr_t>(explicit_ptr) % alignof(AlignedObject) == 0);
+    }
+
+    SUBCASE("New returns nullptr without constructing when arena is full") {
+        LifetimeProbe::ResetCounts();
+        ArenaAllocator tiny(sizeof(LifetimeProbe), alignof(LifetimeProbe));
+
+        auto* first = New<LifetimeProbe>(tiny, 1);
+        REQUIRE(first != nullptr);
+        CHECK(LifetimeProbe::constructions == 1);
+
+        auto* second = New<LifetimeProbe>(tiny, 2);
+        CHECK(second == nullptr);
+        CHECK(LifetimeProbe::constructions == 1);
+
+        first->~LifetimeProbe();
+        CHECK(LifetimeProbe::destructions == 1);
     }
 }
 
@@ -378,12 +394,16 @@ TEST_CASE("ArenaAllocator Memory Information and Statistics")
         CHECK(arena.GetCapacity() == 1024);
         CHECK(arena.GetUsedBytes() == 0);
         CHECK(arena.GetRemainingBytes() == 1024);
+        CHECK(arena.GetUsedSpace() == arena.GetUsedBytes());
+        CHECK(arena.GetFreeSpace() == arena.GetRemainingBytes());
         
         void* ptr = arena.Allocate(512);
         CHECK(ptr != nullptr);
         
         CHECK(arena.GetUsedBytes() >= 512);
         CHECK(arena.GetRemainingBytes() <= 512);
+        CHECK(arena.GetUsedSpace() == arena.GetUsedBytes());
+        CHECK(arena.GetFreeSpace() == arena.GetRemainingBytes());
     }
     
     SUBCASE("Pointer containment check") {
@@ -617,24 +637,6 @@ TEST_CASE("ArenaAllocator Large Allocation Scenarios")
         // All pointers should be valid
         for (void* ptr : ptrs) {
             CHECK(arena.ContainsPointer(ptr));
-        }
-    }
-}
-
-TEST_CASE("ArenaAllocator - explicit alignment is required for over-aligned raw allocations")
-{
-    ArenaAllocator allocator(4096, 16);
-    void* raw = allocator.Allocate(sizeof(AlignedObject), alignof(AlignedObject));
-    REQUIRE(raw != nullptr);
-    CHECK(IsAligned(raw, alignof(AlignedObject)));
-
-    void* rawFromDefaultAlignment = allocator.Allocate(sizeof(AlignedObject));
-    if (rawFromDefaultAlignment != nullptr)
-    {
-        const bool aligned = IsAligned(rawFromDefaultAlignment, alignof(AlignedObject));
-        if (!aligned)
-        {
-            MESSAGE("Allocate(sizeof(T)) returned an address that is not aligned for alignas(64)");
         }
     }
 }

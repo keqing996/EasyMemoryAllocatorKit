@@ -245,6 +245,35 @@ TEST_CASE("StackAllocator exact-fit boundaries are deterministic for alignment-1
     CHECK(overflowAllocator.GetStackTop() == nullptr);
 }
 
+TEST_CASE("StackAllocator capacity and free space accessors track stack frames")
+{
+    StackAllocator allocator(256, 8);
+
+    CHECK(allocator.GetCapacity() >= 256);
+    CHECK(allocator.GetUsedSpace() == 0);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity());
+
+    void* first = allocator.Allocate(24, 8);
+    REQUIRE(first != nullptr);
+    const size_t usedAfterFirst = allocator.GetUsedSpace();
+    CHECK(usedAfterFirst > 24);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity() - usedAfterFirst);
+
+    void* second = allocator.Allocate(32, 16);
+    REQUIRE(second != nullptr);
+    const size_t usedAfterSecond = allocator.GetUsedSpace();
+    CHECK(usedAfterSecond > usedAfterFirst);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity() - usedAfterSecond);
+
+    allocator.Deallocate();
+    CHECK(allocator.GetUsedSpace() == usedAfterFirst);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity() - usedAfterFirst);
+
+    allocator.Deallocate();
+    CHECK(allocator.GetUsedSpace() == 0);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity());
+}
+
 TEST_CASE("StackAllocator auto-inflates tiny capacities to fit one default-aligned byte")
 {
     StackAllocator tinyDefault(0, 1);

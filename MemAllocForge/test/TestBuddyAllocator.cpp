@@ -92,6 +92,42 @@ namespace
     };
 }
 
+#if defined(MAF_LENIENT_DEALLOCATE_ONLY)
+
+static_assert(MAF_DEALLOCATE_STRICT == 0, "Lenient BuddyAllocator tests require MAF_DEALLOCATE_STRICT=0");
+
+TEST_CASE("BuddyAllocator - lenient mode ignores invalid frees without corrupting state")
+{
+    BuddyAllocator allocator(256, 16);
+    auto* ptr = static_cast<std::uint8_t*>(allocator.Allocate(64));
+    REQUIRE(ptr != nullptr);
+
+    const size_t usedBeforeInvalid = allocator.GetUsedSpace();
+    CHECK_NOTHROW(allocator.Deallocate(ptr + 1));
+    CHECK(allocator.GetUsedSpace() == usedBeforeInvalid);
+    CHECK(allocator.GetUsedSpace() + allocator.GetFreeSpace() == allocator.GetCapacity());
+
+    int foreign = 0;
+    CHECK_NOTHROW(allocator.Deallocate(&foreign));
+    CHECK(allocator.GetUsedSpace() == usedBeforeInvalid);
+
+    auto* onePastArena = static_cast<std::uint8_t*>(allocator.GetMemoryBlockPtr()) + allocator.GetTotalSize();
+    CHECK_NOTHROW(allocator.Deallocate(onePastArena));
+    CHECK(allocator.GetUsedSpace() == usedBeforeInvalid);
+
+    allocator.Deallocate(ptr);
+    CHECK(allocator.GetUsedSpace() == 0);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity());
+    CHECK_NOTHROW(allocator.Deallocate(ptr));
+    CHECK(allocator.GetUsedSpace() == 0);
+
+    void* whole = allocator.Allocate(256);
+    REQUIRE(whole != nullptr);
+    allocator.Deallocate(whole);
+}
+
+#else
+
 TEST_CASE("BuddyAllocator - Default API keeps ordinary allocations max-align safe")
 {
     BuddyAllocator allocator(4096, 8);
@@ -246,6 +282,41 @@ TEST_CASE("BuddyAllocator - Constructor rounds arena size and arena alignment pr
     CHECK_THROWS_AS(BuddyAllocator(128, 3), std::invalid_argument);
 }
 
+TEST_CASE("BuddyAllocator - statistics report rounded buddy block occupancy")
+{
+    constexpr size_t defaultAlignment = 16;
+    BuddyAllocator allocator(1024, defaultAlignment);
+
+    CHECK(allocator.GetCapacity() == 1024);
+    CHECK(allocator.GetUsedSpace() == 0);
+    CHECK(allocator.GetFreeSpace() == 1024);
+    CHECK(allocator.GetUsedSpace() + allocator.GetFreeSpace() == allocator.GetCapacity());
+
+    void* small = allocator.Allocate(1, 1);
+    REQUIRE(small != nullptr);
+    const size_t smallBlockSize = ExpectedBlockSize(1, 1, defaultAlignment);
+    CHECK(allocator.GetUsedSpace() == smallBlockSize);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity() - smallBlockSize);
+    CHECK(allocator.GetUsedSpace() + allocator.GetFreeSpace() == allocator.GetCapacity());
+
+    void* medium = allocator.Allocate(65, 16);
+    REQUIRE(medium != nullptr);
+    const size_t mediumBlockSize = ExpectedBlockSize(65, 16, defaultAlignment);
+    CHECK(allocator.GetUsedSpace() == smallBlockSize + mediumBlockSize);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity() - smallBlockSize - mediumBlockSize);
+    CHECK(allocator.GetUsedSpace() + allocator.GetFreeSpace() == allocator.GetCapacity());
+
+    allocator.Deallocate(small);
+    CHECK(allocator.GetUsedSpace() == mediumBlockSize);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity() - mediumBlockSize);
+    CHECK(allocator.GetUsedSpace() + allocator.GetFreeSpace() == allocator.GetCapacity());
+
+    allocator.Deallocate(medium);
+    CHECK(allocator.GetUsedSpace() == 0);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity());
+    CHECK(allocator.GetUsedSpace() + allocator.GetFreeSpace() == allocator.GetCapacity());
+}
+
 TEST_CASE("BuddyAllocator - Out-of-range, interior, and stale non-head frees are rejected")
 {
     BuddyAllocator allocator(256, 16);
@@ -355,12 +426,14 @@ TEST_CASE("BuddyAllocator - Randomized stress preserves alignment, disjointness,
 
             std::memset(ptr, static_cast<int>(step & 0xFF), blockSize);
             liveAllocations.push_back({ptr, blockSize});
+            CHECK(allocator.GetUsedSpace() + allocator.GetFreeSpace() == allocator.GetCapacity());
             continue;
         }
 
         const size_t index = rng() % liveAllocations.size();
         allocator.Deallocate(liveAllocations[index].ptr);
         liveAllocations.erase(liveAllocations.begin() + static_cast<std::ptrdiff_t>(index));
+        CHECK(allocator.GetUsedSpace() + allocator.GetFreeSpace() == allocator.GetCapacity());
     }
 
     for (const LiveAllocation& live : liveAllocations)
@@ -447,3 +520,5 @@ TEST_CASE("BuddyAllocator - non-buddy free blocks do not merge")
     allocator.Deallocate(blocks[6]);
     allocator.Deallocate(blocks[7]);
 }
+
+#endif

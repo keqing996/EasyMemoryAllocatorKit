@@ -40,6 +40,30 @@ namespace
     };
 }
 
+#if defined(MAF_LENIENT_DEALLOCATE_ONLY)
+
+static_assert(MAF_DEALLOCATE_STRICT == 0, "Lenient FrameAllocator tests require MAF_DEALLOCATE_STRICT=0");
+
+TEST_CASE("FrameAllocator - lenient mode ignores invalid frees without corrupting state")
+{
+    FrameAllocator<2> allocator(128, 8);
+    void* ptr = allocator.Allocate(16);
+    REQUIRE(ptr != nullptr);
+
+    int foreign = 0;
+    const size_t availableBeforeInvalid = allocator.GetCurrentFrameAvailableSpace();
+    CHECK_NOTHROW(allocator.Deallocate(&foreign));
+    CHECK_NOTHROW(allocator.Deallocate(static_cast<std::uint8_t*>(ptr) + 1));
+    CHECK(allocator.GetCurrentFrameAvailableSpace() == availableBeforeInvalid);
+
+    allocator.SwapFrames();
+    allocator.SwapFrames();
+    CHECK_NOTHROW(allocator.Deallocate(ptr));
+    CHECK(allocator.GetCurrentFrameAvailableSpace() == 128);
+}
+
+#else
+
 TEST_CASE("FrameAllocator - logical frame capacity is exact")
 {
     FrameAllocator<2> allocator(128, 1);
@@ -51,6 +75,7 @@ TEST_CASE("FrameAllocator - logical frame capacity is exact")
     CHECK(allocator.GetPreviousFrameAvailableSpace() == 128);
     CHECK(allocator.GetCurrentFramePtr() != nullptr);
     CHECK(allocator.GetPreviousFramePtr() != nullptr);
+    CHECK(allocator.GetPreviousFramePtr() == allocator.GetFramePtr(1));
     CHECK(allocator.GetCurrentFramePtr() != allocator.GetPreviousFramePtr());
     CHECK(IsAligned(allocator.GetCurrentFramePtr(), SafeAlignment));
     CHECK(IsAligned(allocator.GetPreviousFramePtr(), SafeAlignment));
@@ -150,6 +175,7 @@ TEST_CASE("FrameAllocator - frame swap resets the new current frame and reuses s
 
     allocator.SwapFrames();
     CHECK(allocator.GetCurrentFrameIndex() == 1);
+    CHECK(allocator.GetPreviousFramePtr() == allocator.GetFramePtr(0));
     CHECK(allocator.GetCurrentFrameAvailableSpace() == 64);
     CHECK(allocator.GetPreviousFrameAvailableSpace() == 48);
 
@@ -159,6 +185,7 @@ TEST_CASE("FrameAllocator - frame swap resets the new current frame and reuses s
 
     allocator.SwapFrames();
     CHECK(allocator.GetCurrentFrameIndex() == 0);
+    CHECK(allocator.GetPreviousFramePtr() == allocator.GetFramePtr(1));
     CHECK(allocator.GetCurrentFrameAvailableSpace() == 64);
 
     void* reused = allocator.Allocate(16);
@@ -242,11 +269,51 @@ TEST_CASE("FrameAllocator - multi-buffer accessors stay consistent")
     REQUIRE(frame1 != nullptr);
     CHECK(frame1 != frame0);
     CHECK(allocator.GetFrameAvailableSpace(1) == 64);
+    CHECK(allocator.GetPreviousFramePtr() == allocator.GetFramePtr(0));
     CHECK(allocator.GetPreviousFrameAvailableSpace() == 64);
 
     allocator.SwapFrames();
     CHECK(allocator.GetCurrentFrameIndex() == 2);
+    CHECK(allocator.GetPreviousFramePtr() == allocator.GetFramePtr(1));
     CHECK(allocator.GetCurrentFrameAvailableSpace() == 96);
+}
+
+TEST_CASE("FrameAllocator - aggregate statistics sum per-frame watermarks")
+{
+    FrameAllocator<3> allocator(96, 8);
+
+    CHECK(allocator.GetCapacity() == 288);
+    CHECK(allocator.GetUsedSpace() == 0);
+    CHECK(allocator.GetFreeSpace() == 288);
+
+    void* frame0 = allocator.Allocate(16, 8);
+    REQUIRE(frame0 != nullptr);
+    CHECK(allocator.GetUsedSpace() == 16);
+    CHECK(allocator.GetFreeSpace() == 272);
+    CHECK(allocator.GetCurrentFrameAvailableSpace() == 80);
+    CHECK(allocator.GetFrameAvailableSpace(0) == 80);
+
+    allocator.SwapFrames();
+    void* frame1 = allocator.Allocate(32, 8);
+    REQUIRE(frame1 != nullptr);
+    CHECK(allocator.GetUsedSpace() == 48);
+    CHECK(allocator.GetFreeSpace() == 240);
+    CHECK(allocator.GetCurrentFrameAvailableSpace() == 64);
+    CHECK(allocator.GetPreviousFrameAvailableSpace() == 80);
+
+    allocator.SwapFrames();
+    CHECK(allocator.GetCurrentFrameAvailableSpace() == 96);
+    CHECK(allocator.GetUsedSpace() == 48);
+
+    void* frame2 = allocator.Allocate(24, 8);
+    REQUIRE(frame2 != nullptr);
+    CHECK(allocator.GetUsedSpace() == 72);
+    CHECK(allocator.GetFreeSpace() == 216);
+
+    allocator.Reset();
+    CHECK(allocator.GetUsedSpace() == 0);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity());
+    CHECK(allocator.GetCurrentFrameIndex() == 0);
 }
 
 TEST_CASE("FrameAllocator - multi-buffer full wrap-around reuse resets each recycled frame")
@@ -331,13 +398,14 @@ TEST_CASE("FrameAllocator - four-buffer full wrap-around invalidates old frame b
     void* ptr = allocator.Allocate(16);
     REQUIRE(ptr != nullptr);
     CHECK_NOTHROW(allocator.Deallocate(ptr));
+    CHECK_NOTHROW(allocator.Deallocate(ptr));
 
     allocator.SwapFrames();
     allocator.SwapFrames();
     allocator.SwapFrames();
     allocator.SwapFrames();
 
-    CHECK_THROWS(allocator.Deallocate(ptr));
+    CHECK_THROWS_AS(allocator.Deallocate(ptr), std::invalid_argument);
 }
 
 TEST_CASE("FrameAllocator - mixed size allocations stay aligned and monotonic")
@@ -359,3 +427,5 @@ TEST_CASE("FrameAllocator - mixed size allocations stay aligned and monotonic")
     CHECK(reinterpret_cast<std::uintptr_t>(p2) >= reinterpret_cast<std::uintptr_t>(p1) + 5);
     CHECK(reinterpret_cast<std::uintptr_t>(p3) >= reinterpret_cast<std::uintptr_t>(p2) + 4);
 }
+
+#endif

@@ -58,6 +58,7 @@ namespace
         return count;
     }
 
+#if !defined(MAF_LENIENT_DEALLOCATE_ONLY)
     struct MaxAlignedObject
     {
         alignas(std::max_align_t) std::array<unsigned char, sizeof(std::max_align_t)> bytes{};
@@ -69,7 +70,35 @@ namespace
         std::array<unsigned char, 64> bytes{};
         int value = 11;
     };
+#endif
 }
+
+#if defined(MAF_LENIENT_DEALLOCATE_ONLY)
+
+static_assert(MAF_DEALLOCATE_STRICT == 0, "Lenient TLSFAllocator tests require MAF_DEALLOCATE_STRICT=0");
+
+TEST_CASE("TLSFAllocator - lenient mode ignores invalid frees without corrupting state")
+{
+    TLSFAllocator<16, 16> allocator(4096, 16);
+    void* ptr = allocator.Allocate(128, 16);
+    REQUIRE(ptr != nullptr);
+
+    int foreign = 0;
+    const size_t usedBeforeInvalid = allocator.GetUsedSpace();
+    CHECK_NOTHROW(allocator.Deallocate(&foreign));
+    CHECK(allocator.GetUsedSpace() == usedBeforeInvalid);
+
+    allocator.Deallocate(ptr);
+    const size_t usedAfterFree = allocator.GetUsedSpace();
+    CHECK_NOTHROW(allocator.Deallocate(ptr));
+    CHECK(allocator.GetUsedSpace() == usedAfterFree);
+
+    void* large = allocator.Allocate(3000, 16);
+    REQUIRE(large != nullptr);
+    allocator.Deallocate(large);
+}
+
+#else
 
 TEST_CASE("TLSFAllocator rejects impossible size and alignment requests")
 {
@@ -85,6 +114,67 @@ TEST_CASE("TLSFAllocator rejects impossible size and alignment requests")
 
     const size_t hugeAlignment = size_t(1) << (std::numeric_limits<size_t>::digits - 2);
     CHECK(allocator.Allocate(32, hugeAlignment) == nullptr);
+}
+
+TEST_CASE("TLSFAllocator rejects invalid and duplicate frees in strict mode")
+{
+    TLSFAllocator<16, 16> allocator(4096, 16);
+
+    CHECK_NOTHROW(allocator.Deallocate(nullptr));
+
+    void* first = allocator.Allocate(128, 16);
+    void* second = allocator.Allocate(64, 16);
+    REQUIRE(first != nullptr);
+    REQUIRE(second != nullptr);
+
+    const size_t usedBeforeInvalid = allocator.GetUsedSpace();
+
+    int foreign = 0;
+    CHECK_THROWS_AS(allocator.Deallocate(&foreign), std::invalid_argument);
+    CHECK(allocator.GetUsedSpace() == usedBeforeInvalid);
+
+    auto* interior = static_cast<unsigned char*>(first) + 1;
+    CHECK_THROWS_AS(allocator.Deallocate(interior), std::invalid_argument);
+    CHECK(allocator.GetUsedSpace() == usedBeforeInvalid);
+
+    allocator.Deallocate(first);
+    const size_t usedAfterFirstFree = allocator.GetUsedSpace();
+    CHECK_THROWS_AS(allocator.Deallocate(first), std::invalid_argument);
+    CHECK(allocator.GetUsedSpace() == usedAfterFirstFree);
+
+    allocator.Deallocate(second);
+    CHECK(allocator.GetUsedSpace() == 0);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity());
+}
+
+TEST_CASE("TLSFAllocator reports capacity and free space consistently")
+{
+    TLSFAllocator<16, 16> allocator(4096, 16);
+
+    CHECK(allocator.GetMemoryBlockPtr() != nullptr);
+    CHECK(allocator.GetCapacity() >= 4096);
+    CHECK(allocator.GetUsedSpace() == 0);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity());
+
+    void* first = allocator.Allocate(128, 16);
+    REQUIRE(first != nullptr);
+    const size_t usedAfterFirst = allocator.GetUsedSpace();
+    CHECK(usedAfterFirst > 0);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity() - usedAfterFirst);
+
+    void* second = allocator.Allocate(256, 32);
+    REQUIRE(second != nullptr);
+    const size_t usedAfterSecond = allocator.GetUsedSpace();
+    CHECK(usedAfterSecond > usedAfterFirst);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity() - usedAfterSecond);
+
+    allocator.Deallocate(first);
+    CHECK(allocator.GetUsedSpace() < usedAfterSecond);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity() - allocator.GetUsedSpace());
+
+    allocator.Deallocate(second);
+    CHECK(allocator.GetUsedSpace() == 0);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity());
 }
 
 TEST_CASE("TLSFAllocator default allocations are max_align_t safe")
@@ -245,6 +335,23 @@ TEST_CASE("TLSFAllocator does not skip a suitable block deeper in the same bin")
     allocator.Deallocate(recovered);
 }
 
+TEST_CASE("TLSFAllocator supports alternate legal bin counts")
+{
+    TLSFAllocator<8, 8> allocator(2048, 16);
+
+    void* first = allocator.Allocate(64, 16);
+    void* second = allocator.Allocate(128, 32);
+    REQUIRE(first != nullptr);
+    REQUIRE(second != nullptr);
+    CHECK(IsAligned(first, 16));
+    CHECK(IsAligned(second, 32));
+    CHECK(allocator.GetUsedSpace() > 0);
+
+    allocator.Deallocate(first);
+    allocator.Deallocate(second);
+    CHECK(allocator.GetUsedSpace() == 0);
+}
+
 TEST_CASE("TLSFAllocator round-trips free list state after fragmentation")
 {
     TLSFAllocator<16, 16> allocator(4096);
@@ -343,3 +450,5 @@ TEST_CASE("TLSFAllocator coalescing restores the initial first block size")
 
     CHECK(allocator.GetFirstBlock()->GetSize() == initialSize);
 }
+
+#endif

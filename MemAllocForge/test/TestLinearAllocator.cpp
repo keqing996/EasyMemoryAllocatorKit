@@ -137,6 +137,7 @@ TEST_CASE("LinearAllocator - Invalid alignments are rejected deterministically")
 {
     CHECK_THROWS_AS(LinearAllocator(128, 0), std::invalid_argument);
     CHECK_THROWS_AS(LinearAllocator(128, 3), std::invalid_argument);
+    CHECK_THROWS_AS(LinearAllocator(std::numeric_limits<size_t>::max(), 8), std::invalid_argument);
 
     LinearAllocator allocator(256, 8);
     const void* currentBefore = allocator.GetCurrentPtr();
@@ -237,6 +238,33 @@ TEST_CASE("LinearAllocator - Exact-fit allocations and reset preserve boundaries
     CHECK(allocator.Allocate(128, 1) == ptr);
 }
 
+TEST_CASE("LinearAllocator - capacity and free space accessors track allocations")
+{
+    LinearAllocator allocator(128, 8);
+
+    CHECK(allocator.GetCapacity() == 128);
+    CHECK(allocator.GetUsedSpace() == 0);
+    CHECK(allocator.GetFreeSpace() == 128);
+    CHECK(allocator.GetFreeSpace() == allocator.GetAvailableSpaceSize());
+
+    void* first = allocator.Allocate(16, 1);
+    REQUIRE(first != nullptr);
+    CHECK(allocator.GetUsedSpace() == 16);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity() - allocator.GetUsedSpace());
+    CHECK(allocator.GetFreeSpace() == allocator.GetAvailableSpaceSize());
+
+    const size_t usedBeforeAligned = allocator.GetUsedSpace();
+    void* second = allocator.Allocate(16, 16);
+    REQUIRE(second != nullptr);
+    CHECK(allocator.GetUsedSpace() >= usedBeforeAligned + 16);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity() - allocator.GetUsedSpace());
+    CHECK(allocator.GetFreeSpace() == allocator.GetAvailableSpaceSize());
+
+    allocator.Reset();
+    CHECK(allocator.GetUsedSpace() == 0);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity());
+}
+
 TEST_CASE("LinearAllocator - Delete does not reclaim storage before reset")
 {
     LinearAllocator allocator(256, 8);
@@ -253,7 +281,7 @@ TEST_CASE("LinearAllocator - Delete does not reclaim storage before reset")
     CHECK(allocator.GetCurrentPtr() != allocator.GetMemoryBlockPtr());
 }
 
-TEST_CASE("LinearAllocator - explicit alignment is required for over-aligned raw allocations")
+TEST_CASE("LinearAllocator - default raw allocations only promise max_align_t alignment")
 {
     LinearAllocator allocator(4096, 16);
     void* raw = allocator.Allocate(sizeof(OverAlignedObject), alignof(OverAlignedObject));
@@ -261,14 +289,8 @@ TEST_CASE("LinearAllocator - explicit alignment is required for over-aligned raw
     CHECK(IsAligned(raw, alignof(OverAlignedObject)));
 
     void* rawFromDefaultAlignment = allocator.Allocate(sizeof(OverAlignedObject));
-    if (rawFromDefaultAlignment != nullptr)
-    {
-        const bool aligned = IsAligned(rawFromDefaultAlignment, alignof(OverAlignedObject));
-        if (!aligned)
-        {
-            MESSAGE("Allocate(sizeof(T)) returned an address that is not aligned for alignas(64)");
-        }
-    }
+    REQUIRE(rawFromDefaultAlignment != nullptr);
+    CHECK(IsAligned(rawFromDefaultAlignment, alignof(std::max_align_t)));
 }
 
 TEST_CASE("STLAllocatorAdapter - forwards alignof(T) for over-aligned value types")

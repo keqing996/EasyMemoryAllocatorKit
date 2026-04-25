@@ -95,6 +95,33 @@ static auto SnapshotFreeList(const PoolAllocator& allocator, const std::vector<v
     return freeBlocks;
 }
 
+#if defined(MAF_LENIENT_DEALLOCATE_ONLY)
+
+static_assert(MAF_DEALLOCATE_STRICT == 0, "Lenient PoolAllocator tests require MAF_DEALLOCATE_STRICT=0");
+
+TEST_CASE("PoolAllocator - lenient mode ignores invalid frees without corrupting state")
+{
+    PoolAllocator allocator(64, 2, 16);
+    void* ptr = allocator.Allocate();
+    REQUIRE(ptr != nullptr);
+
+    int foreign = 0;
+    const size_t availableBeforeInvalid = allocator.GetAvailableBlockCount();
+    CHECK_NOTHROW(allocator.Deallocate(&foreign));
+    CHECK(allocator.GetAvailableBlockCount() == availableBeforeInvalid);
+
+    allocator.Deallocate(ptr);
+    CHECK(allocator.GetAvailableBlockCount() == 2);
+    CHECK_NOTHROW(allocator.Deallocate(ptr));
+    CHECK(allocator.GetAvailableBlockCount() == 2);
+
+    void* again = allocator.Allocate();
+    REQUIRE(again != nullptr);
+    allocator.Deallocate(again);
+}
+
+#else
+
 TEST_CASE("PoolAllocator - Constructor hardening")
 {
     SUBCASE("rejects zero-sized blocks")
@@ -207,29 +234,47 @@ TEST_CASE("PoolAllocator - Alignment contract")
 TEST_CASE("PoolAllocator - Availability and reuse invariants")
 {
     PoolAllocator allocator(sizeof(Data64B), 4, 32);
+    const size_t capacity = allocator.GetCapacity();
+    const size_t blockStride = capacity / 4;
+
+    REQUIRE(capacity > 0);
+    CHECK(allocator.GetUsedSpace() == 0);
+    CHECK(allocator.GetFreeSpace() == capacity);
 
     void* p0 = allocator.Allocate();
     REQUIRE(p0 != nullptr);
     CHECK(allocator.GetAvailableBlockCount() == 3);
+    CHECK(allocator.GetUsedSpace() == blockStride);
+    CHECK(allocator.GetFreeSpace() == capacity - blockStride);
 
     void* p1 = allocator.Allocate();
     REQUIRE(p1 != nullptr);
     CHECK(allocator.GetAvailableBlockCount() == 2);
+    CHECK(allocator.GetUsedSpace() == blockStride * 2);
+    CHECK(allocator.GetFreeSpace() == capacity - blockStride * 2);
 
     void* p2 = allocator.Allocate();
     REQUIRE(p2 != nullptr);
     CHECK(allocator.GetAvailableBlockCount() == 1);
+    CHECK(allocator.GetUsedSpace() == blockStride * 3);
+    CHECK(allocator.GetFreeSpace() == capacity - blockStride * 3);
 
     void* p3 = allocator.Allocate();
     REQUIRE(p3 != nullptr);
     CHECK(allocator.GetAvailableBlockCount() == 0);
+    CHECK(allocator.GetUsedSpace() == capacity);
+    CHECK(allocator.GetFreeSpace() == 0);
 
     std::vector<void*> knownBlocks = {p0, p1, p2, p3};
 
     allocator.Deallocate(p1);
     CHECK(allocator.GetAvailableBlockCount() == 1);
+    CHECK(allocator.GetUsedSpace() == capacity - blockStride);
+    CHECK(allocator.GetFreeSpace() == blockStride);
     allocator.Deallocate(p3);
     CHECK(allocator.GetAvailableBlockCount() == 2);
+    CHECK(allocator.GetUsedSpace() == capacity - blockStride * 2);
+    CHECK(allocator.GetFreeSpace() == blockStride * 2);
 
     std::vector<void*> freeBlocks = SnapshotFreeList(allocator, knownBlocks);
     REQUIRE(freeBlocks.size() == 2);
@@ -241,6 +286,8 @@ TEST_CASE("PoolAllocator - Availability and reuse invariants")
     CHECK(reuse0 == p3);
     CHECK(reuse1 == p1);
     CHECK(allocator.GetAvailableBlockCount() == 0);
+    CHECK(allocator.GetUsedSpace() == capacity);
+    CHECK(allocator.GetFreeSpace() == 0);
 
     allocator.Deallocate(p0);
     allocator.Deallocate(p2);
@@ -249,6 +296,8 @@ TEST_CASE("PoolAllocator - Availability and reuse invariants")
 
     std::vector<void*> allFreeBlocks = SnapshotFreeList(allocator, knownBlocks);
     CHECK(allFreeBlocks.size() == knownBlocks.size());
+    CHECK(allocator.GetUsedSpace() == 0);
+    CHECK(allocator.GetFreeSpace() == capacity);
 }
 
 TEST_CASE("PoolAllocator - Invalid, foreign, and duplicate frees are rejected")
@@ -271,6 +320,10 @@ TEST_CASE("PoolAllocator - Invalid, foreign, and duplicate frees are rejected")
 
     std::array<std::byte, 64> foreignBlock{};
     CHECK_THROWS_AS(allocator.Deallocate(foreignBlock.data()), std::invalid_argument);
+    CHECK(allocator.GetAvailableBlockCount() == 1);
+
+    auto* onePastPool = static_cast<std::uint8_t*>(knownBlocks[0]) + allocator.GetCapacity();
+    CHECK_THROWS_AS(allocator.Deallocate(onePastPool), std::invalid_argument);
     CHECK(allocator.GetAvailableBlockCount() == 1);
 
     CHECK_THROWS_AS(allocator.Deallocate(static_cast<std::uint8_t*>(knownBlocks[2]) + 1), std::invalid_argument);
@@ -429,3 +482,5 @@ TEST_CASE("PoolAllocator - block addresses do not overlap")
         CHECK(addrs[i] - addrs[i - 1] >= kBlockSize);
     }
 }
+
+#endif

@@ -49,6 +49,32 @@ namespace
     }
 }
 
+#if defined(MAF_LENIENT_DEALLOCATE_ONLY)
+
+static_assert(MAF_DEALLOCATE_STRICT == 0, "Lenient ThreadCachingAllocator tests require MAF_DEALLOCATE_STRICT=0");
+
+TEST_CASE("ThreadCachingAllocator - lenient mode ignores invalid frees without corrupting state")
+{
+    ThreadCachingAllocator allocator;
+    void* ptr = allocator.Allocate(64);
+    REQUIRE(ptr != nullptr);
+
+    int foreign = 0;
+    CHECK_NOTHROW(allocator.Deallocate(&foreign));
+    CHECK(allocator.GetActiveAllocationCount() == 1);
+
+    allocator.Deallocate(ptr);
+    CHECK(allocator.GetActiveAllocationCount() == 0);
+    CHECK_NOTHROW(allocator.Deallocate(ptr));
+    CHECK(allocator.GetActiveAllocationCount() == 0);
+
+    void* again = allocator.Allocate(64);
+    REQUIRE(again != nullptr);
+    allocator.Deallocate(again);
+}
+
+#else
+
 TEST_CASE("ThreadCachingAllocator honors default and explicit alignment contracts")
 {
     ThreadCachingAllocator allocator;
@@ -137,6 +163,35 @@ TEST_CASE("ThreadCachingAllocator validates invalid inputs and overflow")
         const size_t hugeAlignment = size_t(1) << (std::numeric_limits<size_t>::digits - 1);
         CHECK(allocator.Allocate(hugeAlignment, hugeAlignment) == nullptr);
     }
+}
+
+TEST_CASE("ThreadCachingAllocator tracks active allocation accounting")
+{
+    ThreadCachingAllocator allocator;
+
+    CHECK(allocator.GetActiveAllocationCount() == 0);
+    CHECK(allocator.GetTotalAllocatedBytes() == 0);
+
+    void* pooled = allocator.Allocate(64);
+    REQUIRE(pooled != nullptr);
+    const size_t pooledBytes = allocator.GetTotalAllocatedBytes();
+    CHECK(allocator.GetActiveAllocationCount() == 1);
+    CHECK(pooledBytes > 0);
+
+    void* direct = allocator.Allocate(ThreadCachingAllocator::kLargeThreshold + 512);
+    REQUIRE(direct != nullptr);
+    const size_t totalBytes = allocator.GetTotalAllocatedBytes();
+    CHECK(allocator.GetActiveAllocationCount() == 2);
+    CHECK(totalBytes > pooledBytes);
+
+    allocator.Deallocate(pooled);
+    CHECK(allocator.GetActiveAllocationCount() == 1);
+    CHECK(allocator.GetTotalAllocatedBytes() < totalBytes);
+    CHECK(allocator.GetTotalAllocatedBytes() > 0);
+
+    allocator.Deallocate(direct);
+    CHECK(allocator.GetActiveAllocationCount() == 0);
+    CHECK(allocator.GetTotalAllocatedBytes() == 0);
 }
 
 TEST_CASE("ThreadCachingAllocator keeps pooled-large and direct-large behavior distinct")
@@ -321,6 +376,98 @@ TEST_CASE("ThreadCachingAllocator reuses an existing consumer cache for cross-th
           consumerCacheBefore.load(std::memory_order_acquire));
     CHECK(consumerCacheAfterCrossThreadFree.load(std::memory_order_acquire) ==
           consumerCacheAfterWarmup.load(std::memory_order_acquire));
+}
+
+TEST_CASE("ThreadCachingAllocator handles cross-thread frees for medium and large cached classes")
+{
+    constexpr size_t kMediumPayload =
+        MaxDefaultAlignedPayloadFor(ThreadCachingAllocator::kSmallThreshold) + 1;
+    constexpr size_t kLargePayload =
+        MaxDefaultAlignedPayloadFor(ThreadCachingAllocator::kMediumThreshold) + 1;
+
+    auto runCrossThreadFree = [](size_t requestSize, size_t alignment, bool warmConsumerCache)
+    {
+        ThreadCachingAllocator allocator;
+        std::vector<void*> producerPointers;
+
+        for (int i = 0; i < 4; ++i)
+        {
+            void* ptr = allocator.Allocate(requestSize, alignment);
+            REQUIRE(ptr != nullptr);
+            producerPointers.push_back(ptr);
+        }
+
+        CHECK(allocator.GetActiveAllocationCount() == producerPointers.size());
+        CHECK(allocator.GetTotalAllocatedBytes() > 0);
+
+        std::atomic<bool> workerOk{true};
+        std::atomic<size_t> consumerCacheBefore{std::numeric_limits<size_t>::max()};
+        std::atomic<size_t> consumerCacheAfter{std::numeric_limits<size_t>::max()};
+
+        std::thread consumer([&]()
+        {
+            try
+            {
+                if (warmConsumerCache)
+                {
+                    void* warmup = allocator.Allocate(requestSize, alignment);
+                    if (!warmup)
+                    {
+                        workerOk.store(false, std::memory_order_release);
+                        return;
+                    }
+                    allocator.Deallocate(warmup);
+                }
+
+                consumerCacheBefore.store(allocator.GetThreadCacheSize(), std::memory_order_release);
+                for (void* ptr : producerPointers)
+                    allocator.Deallocate(ptr);
+                consumerCacheAfter.store(allocator.GetThreadCacheSize(), std::memory_order_release);
+            }
+            catch (...)
+            {
+                workerOk.store(false, std::memory_order_release);
+            }
+        });
+
+        consumer.join();
+
+        CHECK(workerOk.load(std::memory_order_acquire));
+        CHECK(allocator.GetActiveAllocationCount() == 0);
+        CHECK(allocator.GetTotalAllocatedBytes() == 0);
+
+        if (warmConsumerCache)
+        {
+            CHECK(consumerCacheBefore.load(std::memory_order_acquire) > 0);
+            CHECK(consumerCacheAfter.load(std::memory_order_acquire) >
+                  consumerCacheBefore.load(std::memory_order_acquire));
+        }
+        else
+        {
+            CHECK(consumerCacheBefore.load(std::memory_order_acquire) == 0);
+            CHECK(consumerCacheAfter.load(std::memory_order_acquire) == 0);
+        }
+    };
+
+    SUBCASE("medium class without a consumer cache returns to central")
+    {
+        runCrossThreadFree(kMediumPayload, ThreadCachingAllocator::kDefaultAlignment, false);
+    }
+
+    SUBCASE("medium class reuses an existing consumer cache")
+    {
+        runCrossThreadFree(kMediumPayload, ThreadCachingAllocator::kDefaultAlignment, true);
+    }
+
+    SUBCASE("large class without a consumer cache returns to central")
+    {
+        runCrossThreadFree(kLargePayload, 64, false);
+    }
+
+    SUBCASE("large class reuses an existing consumer cache")
+    {
+        runCrossThreadFree(kLargePayload, 64, true);
+    }
 }
 
 TEST_CASE("ThreadCachingAllocator teardown tolerates live current-thread and worker-thread caches")
@@ -556,23 +703,10 @@ TEST_CASE("ThreadCachingAllocator remains correct under concurrent allocation tr
     CHECK(successes.load(std::memory_order_acquire) == kThreadCount);
 }
 
-TEST_CASE("ThreadCachingAllocator - basic alloc/dealloc preserves payload bytes")
-{
-    ThreadCachingAllocator allocator;
-
-    void* ptr = allocator.Allocate(64);
-    REQUIRE(ptr != nullptr);
-    CHECK(reinterpret_cast<std::uintptr_t>(ptr) % alignof(std::max_align_t) == 0);
-
-    std::memset(ptr, 0xAB, 64);
-    CHECK(static_cast<std::uint8_t*>(ptr)[0] == 0xAB);
-    CHECK(static_cast<std::uint8_t*>(ptr)[63] == 0xAB);
-
-    allocator.Deallocate(ptr);
-}
-
 TEST_CASE("ThreadCachingAllocator - Deallocate nullptr is a no-op")
 {
     ThreadCachingAllocator allocator;
     CHECK_NOTHROW(allocator.Deallocate(nullptr));
 }
+
+#endif

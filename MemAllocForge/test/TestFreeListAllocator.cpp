@@ -65,6 +65,36 @@ namespace
     }
 }
 
+#if defined(MAF_LENIENT_DEALLOCATE_ONLY)
+
+static_assert(MAF_DEALLOCATE_STRICT == 0, "Lenient FreeListAllocator tests require MAF_DEALLOCATE_STRICT=0");
+
+TEST_CASE("FreeListAllocator - lenient mode ignores invalid frees without corrupting state")
+{
+    FreeListAllocator allocator(1024, 16);
+    void* a = allocator.Allocate(64, 16);
+    void* b = allocator.Allocate(64, 16);
+    REQUIRE(a != nullptr);
+    REQUIRE(b != nullptr);
+
+    int foreign = 0;
+    const size_t usedBeforeInvalid = allocator.GetUsedSpace();
+    CHECK_NOTHROW(allocator.Deallocate(&foreign));
+    CHECK(allocator.GetUsedSpace() == usedBeforeInvalid);
+
+    allocator.Deallocate(a);
+    const size_t usedAfterFree = allocator.GetUsedSpace();
+    CHECK_NOTHROW(allocator.Deallocate(a));
+    CHECK(allocator.GetUsedSpace() == usedAfterFree);
+
+    allocator.Deallocate(b);
+    void* whole = allocator.Allocate(900, 16);
+    REQUIRE(whole != nullptr);
+    allocator.Deallocate(whole);
+}
+
+#else
+
 TEST_CASE("FreeListAllocator - default allocations stay safe for typed objects")
 {
     FreeListAllocator allocator(1024, 1);
@@ -166,6 +196,37 @@ TEST_CASE("FreeListAllocator - split boundaries stop exactly when remainder is n
     }
 }
 
+TEST_CASE("FreeListAllocator - memory and space accessors track allocation state")
+{
+    FreeListAllocator allocator(1024, 16);
+
+    CHECK(allocator.GetMemoryBlockPtr() != nullptr);
+    CHECK(allocator.GetFirstNode() != nullptr);
+    CHECK(allocator.GetCapacity() >= 1024);
+    CHECK(allocator.GetUsedSpace() == 0);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity());
+
+    void* first = allocator.Allocate(64, 16);
+    REQUIRE(first != nullptr);
+    const size_t usedAfterFirst = allocator.GetUsedSpace();
+    CHECK(usedAfterFirst > 0);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity() - usedAfterFirst);
+
+    void* second = allocator.Allocate(128, 32);
+    REQUIRE(second != nullptr);
+    const size_t usedAfterSecond = allocator.GetUsedSpace();
+    CHECK(usedAfterSecond > usedAfterFirst);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity() - usedAfterSecond);
+
+    allocator.Deallocate(first);
+    CHECK(allocator.GetUsedSpace() < usedAfterSecond);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity() - allocator.GetUsedSpace());
+
+    allocator.Deallocate(second);
+    CHECK(allocator.GetUsedSpace() == 0);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity());
+}
+
 TEST_CASE("FreeListAllocator - pool exhaustion is followed by deterministic reuse")
 {
     FreeListAllocator allocator(2048, 16);
@@ -254,7 +315,7 @@ TEST_CASE("FreeListAllocator - longer randomized sequences preserve reuse and co
     allocator.Deallocate(largeBlock);
 }
 
-TEST_CASE("FreeListAllocator - explicit alignment is required for over-aligned raw allocations")
+TEST_CASE("FreeListAllocator - default raw allocations only promise max_align_t alignment")
 {
     FreeListAllocator allocator(4096, 16);
     void* raw = allocator.Allocate(sizeof(OverAligned128), alignof(OverAligned128));
@@ -262,14 +323,11 @@ TEST_CASE("FreeListAllocator - explicit alignment is required for over-aligned r
     CHECK(IsAligned(raw, alignof(OverAligned128)));
 
     void* rawFromDefaultAlignment = allocator.Allocate(sizeof(OverAligned128));
-    if (rawFromDefaultAlignment != nullptr)
-    {
-        const bool aligned = IsAligned(rawFromDefaultAlignment, alignof(OverAligned128));
-        if (!aligned)
-        {
-            MESSAGE("Allocate(sizeof(T)) returned an address that is not aligned for alignas(128)");
-        }
-    }
+    REQUIRE(rawFromDefaultAlignment != nullptr);
+    CHECK(IsAligned(rawFromDefaultAlignment, alignof(std::max_align_t)));
+
+    allocator.Deallocate(rawFromDefaultAlignment);
+    allocator.Deallocate(raw);
 }
 
 TEST_CASE("FreeListAllocator - forward coalescing merges adjacent free blocks")
@@ -311,6 +369,8 @@ TEST_CASE("FreeListAllocator - backward coalescing merges adjacent free blocks")
     allocator.Deallocate(large);
     allocator.Deallocate(c);
 }
+
+#endif
 
 TEST_CASE("FreeListAllocator - three-way coalescing merges surrounding free blocks")
 {

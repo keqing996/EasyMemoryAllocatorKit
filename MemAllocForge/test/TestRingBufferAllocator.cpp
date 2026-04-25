@@ -1,13 +1,16 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <deque>
 #include <limits>
 #include <new>
+#include <random>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include "doctest/doctest.h"
 #include "MAF/RingBufferAllocator.hpp"
@@ -39,6 +42,21 @@ namespace
         CHECK(allocator.GetAvailableSpace() == allocator.GetTotalFreeSpace());
         CHECK(allocator.GetUsedSpace() + allocator.GetAvailableSpace() == allocator.GetCapacity());
     }
+
+    struct PendingRecord
+    {
+        void* ptr;
+        size_t payloadSize;
+        size_t totalSize;
+        std::uint8_t tag;
+    };
+
+    void CheckRecordBytes(const PendingRecord& record)
+    {
+        auto* bytes = static_cast<std::uint8_t*>(record.ptr);
+        for (size_t i = 0; i < record.payloadSize; ++i)
+            CHECK(bytes[i] == record.tag);
+    }
 }
 
 TEST_CASE("RingBufferAllocator validates construction and trivial edge cases")
@@ -49,6 +67,7 @@ TEST_CASE("RingBufferAllocator validates construction and trivial edge cases")
 
     RingBufferAllocator allocator(128, 8);
     CHECK(allocator.Allocate(0) == nullptr);
+    CHECK_FALSE(allocator.CanAllocate(0));
     allocator.DeallocateNext();
     CHECK(allocator.GetUsedSpace() == 0);
     CheckAccounting(allocator);
@@ -105,6 +124,39 @@ TEST_CASE("RingBufferAllocator distinguishes total free space from immediate all
     void* wrapped = allocator.Allocate(72);
     REQUIRE(wrapped != nullptr);
     CHECK(PtrAddr(wrapped) < PtrAddr(second));
+}
+
+TEST_CASE("RingBufferAllocator statistics distinguish total, allocatable, and contiguous space")
+{
+    RingBufferAllocator allocator(256, 8);
+    const size_t firstRecordSize = MeasureRecordSize(96, 8);
+    const size_t secondRecordSize = MeasureRecordSize(48, 8);
+    const size_t wrappedRecordSize = MeasureRecordSize(72, 8);
+
+    void* first = allocator.Allocate(96, 8);
+    void* second = allocator.Allocate(48, 8);
+    REQUIRE(first != nullptr);
+    REQUIRE(second != nullptr);
+    CHECK(allocator.GetUsedSpace() == firstRecordSize + secondRecordSize);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity() - allocator.GetUsedSpace());
+
+    allocator.DeallocateNext();
+    CHECK(allocator.GetUsedSpace() == secondRecordSize);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity() - secondRecordSize);
+    CHECK(allocator.GetLargestFreeContiguousSpace() < allocator.GetTotalFreeSpace());
+    CHECK(allocator.CanAllocate(72, 8));
+
+    void* wrapped = allocator.Allocate(72, 8);
+    REQUIRE(wrapped != nullptr);
+    CHECK(PtrAddr(wrapped) < PtrAddr(second));
+    CHECK(allocator.GetUsedSpace() == secondRecordSize + wrappedRecordSize);
+    CHECK(allocator.GetAllocatableFreeSpace() <= allocator.GetTotalFreeSpace());
+
+    allocator.DeallocateNext();
+    allocator.DeallocateNext();
+    CHECK(allocator.GetUsedSpace() == 0);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity());
+    CHECK(allocator.GetAllocatableFreeSpace() == allocator.GetCapacity());
 }
 
 TEST_CASE("RingBufferAllocator handles tiny capacity boundaries predictably")
@@ -325,18 +377,52 @@ TEST_CASE("RingBufferAllocator rejects impossible sizes without corrupting state
 
 TEST_CASE("RingBufferAllocator detects header corruption before consuming")
 {
-    RingBufferAllocator allocator(256, 8);
-    REQUIRE(allocator.Allocate(24) != nullptr);
+    auto corruptFirstHeaderAndExpectThrow = [](size_t totalSize, size_t payloadSize)
+    {
+        RingBufferAllocator allocator(256, 8);
+        REQUIRE(allocator.Allocate(24) != nullptr);
 
-    const size_t usedBefore = allocator.GetUsedSpace();
-    auto* raw = static_cast<std::uint8_t*>(allocator.GetMemoryBlockPtr());
-    REQUIRE(raw != nullptr);
+        const size_t usedBefore = allocator.GetUsedSpace();
+        auto* raw = static_cast<std::uint8_t*>(allocator.GetMemoryBlockPtr());
+        REQUIRE(raw != nullptr);
 
-    std::memset(raw, 0, sizeof(std::size_t) * 2);
+        std::memcpy(raw, &totalSize, sizeof(totalSize));
+        std::memcpy(raw + sizeof(totalSize), &payloadSize, sizeof(payloadSize));
 
-    CHECK_THROWS_AS(allocator.DeallocateNext(), std::runtime_error);
-    CHECK_THROWS_AS(allocator.Consume(24), std::runtime_error);
-    CHECK(allocator.GetUsedSpace() == usedBefore);
+        CHECK_THROWS_AS(allocator.DeallocateNext(), std::runtime_error);
+        CHECK(allocator.GetUsedSpace() == usedBefore);
+    };
+
+    SUBCASE("zero payload is corrupt")
+    {
+        RingBufferAllocator allocator(256, 8);
+        REQUIRE(allocator.Allocate(24) != nullptr);
+
+        const size_t usedBefore = allocator.GetUsedSpace();
+        auto* raw = static_cast<std::uint8_t*>(allocator.GetMemoryBlockPtr());
+        REQUIRE(raw != nullptr);
+
+        std::memset(raw, 0, sizeof(std::size_t) * 2);
+
+        CHECK_THROWS_AS(allocator.DeallocateNext(), std::runtime_error);
+        CHECK_THROWS_AS(allocator.Consume(24), std::runtime_error);
+        CHECK(allocator.GetUsedSpace() == usedBefore);
+    }
+
+    SUBCASE("total size must be header-aligned")
+    {
+        corruptFirstHeaderAndExpectThrow(sizeof(std::size_t) * 2 + 1, 1);
+    }
+
+    SUBCASE("total size cannot exceed used bytes")
+    {
+        corruptFirstHeaderAndExpectThrow(128, 1);
+    }
+
+    SUBCASE("payload must fit inside the recorded total size")
+    {
+        corruptFirstHeaderAndExpectThrow(sizeof(std::size_t) * 4, sizeof(std::size_t) * 4);
+    }
 }
 
 TEST_CASE("RingBufferAllocator - failed allocation does not modify observable state")
@@ -373,10 +459,8 @@ TEST_CASE("RingBufferAllocator - CanAllocate remains consistent with Allocate")
         }
 
         void* shouldFail = allocator.Allocate(16);
-        if (shouldFail != nullptr)
-        {
-            MESSAGE("CanAllocate returned false but Allocate succeeded in round ", round);
-        }
+        INFO("round=" << round);
+        CHECK(shouldFail == nullptr);
 
         allocator.Reset();
     }
@@ -426,4 +510,76 @@ TEST_CASE("RingBufferAllocator - data integrity survives wrap-around")
         allocator.DeallocateNext();
         records.pop_front();
     }
+}
+
+TEST_CASE("RingBufferAllocator - randomized state machine preserves FIFO accounting")
+{
+    RingBufferAllocator allocator(512, 8);
+    std::deque<PendingRecord> pending;
+    std::mt19937 rng(0xC1C0FFEEu);
+    const std::array<size_t, 8> sizes{1, 7, 16, 24, 31, 48, 63, 96};
+    const std::array<size_t, 4> alignments{1, 2, 8, 32};
+
+    for (size_t step = 0; step < 400; ++step)
+    {
+        const unsigned operation = rng() % 10;
+        if (operation == 0)
+        {
+            allocator.Reset();
+            pending.clear();
+            CheckAccounting(allocator);
+            continue;
+        }
+
+        if (!pending.empty() && operation <= 3)
+        {
+            PendingRecord front = pending.front();
+            CheckRecordBytes(front);
+            const size_t usedBefore = allocator.GetUsedSpace();
+
+            if ((operation % 2) == 0)
+                allocator.Consume(front.payloadSize);
+            else
+                allocator.DeallocateNext();
+
+            pending.pop_front();
+            CHECK(allocator.GetUsedSpace() + front.totalSize == usedBefore);
+            CheckAccounting(allocator);
+            continue;
+        }
+
+        const size_t payload = sizes[rng() % sizes.size()];
+        const size_t alignment = alignments[rng() % alignments.size()];
+        const bool canAllocate = allocator.CanAllocate(payload, alignment);
+        const size_t usedBefore = allocator.GetUsedSpace();
+        void* ptr = allocator.Allocate(payload, alignment);
+
+        CHECK((ptr != nullptr) == canAllocate);
+        if (!ptr)
+        {
+            CHECK(allocator.GetUsedSpace() == usedBefore);
+            CheckAccounting(allocator);
+            continue;
+        }
+
+        const size_t recordSize = allocator.GetUsedSpace() - usedBefore;
+        const auto tag = static_cast<std::uint8_t>((step * 37U) & 0xFFU);
+        std::memset(ptr, tag, payload);
+        pending.push_back({ptr, payload, recordSize, tag});
+        CheckAccounting(allocator);
+    }
+
+    while (!pending.empty())
+    {
+        PendingRecord front = pending.front();
+        CheckRecordBytes(front);
+        const size_t usedBefore = allocator.GetUsedSpace();
+        allocator.DeallocateNext();
+        pending.pop_front();
+        CHECK(allocator.GetUsedSpace() + front.totalSize == usedBefore);
+        CheckAccounting(allocator);
+    }
+
+    CHECK(allocator.GetUsedSpace() == 0);
+    CHECK(allocator.GetFreeSpace() == allocator.GetCapacity());
 }
