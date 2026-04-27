@@ -1,5 +1,5 @@
 
-[![Build](https://github.com/keqing996/MemoryAllocator/actions/workflows/multi-platform.yml/badge.svg)](https://github.com/keqing996/MemoryAllocator/actions/workflows/multi-platform.yml)
+[![Build](https://github.com/keqing996/MemAllocForge/actions/workflows/multi-platform.yml/badge.svg)](https://github.com/keqing996/MemAllocForge/actions/workflows/multi-platform.yml)
 
 # MemAllocForge
 
